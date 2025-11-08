@@ -296,9 +296,18 @@ class ExperimentExecutor:
         finish_reason = None
         if completion.choices:
             choice = completion.choices[0]
-            if choice.message and choice.message.content:
-                response_text = choice.message.content
             finish_reason = choice.finish_reason
+
+            # Handle different message formats
+            if choice.message:
+                if choice.message.content:
+                    response_text = choice.message.content
+                # Some models might use refusal or other fields
+                elif hasattr(choice.message, 'refusal') and choice.message.refusal:
+                    response_text = f"[REFUSAL] {choice.message.refusal}"
+                # Check for tool calls or function calls
+                elif hasattr(choice.message, 'tool_calls') and choice.message.tool_calls:
+                    response_text = f"[TOOL_CALLS] {choice.message.tool_calls}"
 
         # Extract token usage
         usage = completion.usage

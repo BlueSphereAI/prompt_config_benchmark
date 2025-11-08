@@ -131,43 +131,40 @@ def run(prompts_dir, configs_dir, db, prompt, config):
     console.print(f"Prompts: {', '.join(prompts.keys())}")
     console.print(f"Configs: {', '.join(configs.keys())}\n")
 
-    # Run experiments with progress bar
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console
-    ) as progress:
-        task = progress.add_task("Running experiments...", total=total)
+    # Run experiments in parallel
+    console.print("[cyan]Running experiments in parallel...[/cyan]\n")
 
-        for prompt_name, prompt_obj in prompts.items():
-            for config_name, config_obj in configs.items():
-                progress.update(
-                    task,
-                    description=f"Running: {prompt_name} with {config_name}"
+    for prompt_name, prompt_obj in prompts.items():
+        console.print(f"[bold]Prompt: {prompt_name}[/bold]")
+        console.print(f"Running {len(configs)} configs in parallel...")
+
+        # Run all configs for this prompt in parallel
+        results = executor.run_batch(
+            prompt=prompt_obj,
+            configs=configs
+        )
+
+        # Save and display results
+        for config_name, result in results.items():
+            storage.save_result(result)
+
+            if result.success:
+                console.print(
+                    f"  [green]✓[/green] {config_name}: "
+                    f"{result.duration_seconds:.2f}s, "
+                    f"{result.total_tokens or 0} tokens, "
+                    f"{len(result.response)} chars"
+                )
+                if not result.response:
+                    console.print(f"    [yellow]⚠[/yellow] Empty response (finish_reason: {result.finish_reason})")
+            else:
+                console.print(
+                    f"  [red]✗[/red] {config_name}: {result.error}"
                 )
 
-                result = executor.run_experiment(
-                    prompt=prompt_obj,
-                    config=config_obj,
-                    config_name=config_name
-                )
+        console.print()
 
-                # Save result
-                storage.save_result(result)
-
-                if result.success:
-                    progress.console.print(
-                        f"  [green]✓[/green] {prompt_name} + {config_name}: "
-                        f"{result.duration_seconds:.2f}s"
-                    )
-                else:
-                    progress.console.print(
-                        f"  [red]✗[/red] {prompt_name} + {config_name}: {result.error}"
-                    )
-
-                progress.advance(task)
-
-    console.print("\n[bold green]Benchmark run complete![/bold green]")
+    console.print("[bold green]Benchmark run complete![/bold green]")
     console.print(f"Results saved to: {db_url}")
 
 
