@@ -1,0 +1,6 @@
+{
+  "model": "gpt-5-mini",
+  "max_output_tokens": 500,
+  "verbosity": "low",
+  "reasoning_effort": "minimal"
+}

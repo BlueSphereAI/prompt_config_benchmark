@@ -1,0 +1,10 @@
+category: education
+description: Explain a concept at different levels
+name: explain-concept
+tags:
+- education
+- explanation
+template: Explain {concept} to a {level} audience.
+variables:
+  concept: ''
+  level: beginner

@@ -1,0 +1,11 @@
+category: creative
+description: Generate a creative story
+name: creative-story
+tags:
+- creative
+- story
+- writing
+template: Write a creative short story about {topic} in {style} style.
+variables:
+  style: fantasy
+  topic: adventure

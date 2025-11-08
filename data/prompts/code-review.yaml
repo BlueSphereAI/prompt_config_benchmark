@@ -1,0 +1,18 @@
+category: code
+description: Review code and provide feedback
+name: code-review
+tags:
+- code
+- review
+- programming
+template: 'Review the following code and provide feedback:
+
+
+  ```{language}
+
+  {code}
+
+  ```'
+variables:
+  code: ''
+  language: python

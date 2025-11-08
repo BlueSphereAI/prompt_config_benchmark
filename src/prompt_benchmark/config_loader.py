@@ -211,43 +211,43 @@ class PromptLoader:
 
 def create_default_configs() -> Dict[str, LangfuseConfig]:
     """
-    Create a set of default configurations for common use cases.
+    Create a set of default GPT-5 configurations for common use cases.
 
     Returns:
         Dictionary of default configurations
     """
     configs = {
-        "gpt4-fast": LangfuseConfig(
-            model="gpt-4-turbo-preview",
-            temperature=0.3,
-            max_output_tokens=500
+        # GPT-5 Mini variants (faster, lower cost)
+        "gpt5-mini-fast": LangfuseConfig(
+            model="gpt-5-mini",
+            max_output_tokens=500,
+            verbosity="low",
+            reasoning_effort="minimal"
         ),
-        "gpt4-balanced": LangfuseConfig(
-            model="gpt-4-turbo-preview",
-            temperature=0.7,
-            max_output_tokens=1500
+        "gpt5-mini-balanced": LangfuseConfig(
+            model="gpt-5-mini",
+            max_output_tokens=1000,
+            verbosity="medium",
+            reasoning_effort="medium"
         ),
-        "gpt4-creative": LangfuseConfig(
-            model="gpt-4-turbo-preview",
-            temperature=1.0,
-            max_output_tokens=2000
-        ),
-        "gpt35-fast": LangfuseConfig(
-            model="gpt-3.5-turbo",
-            temperature=0.3,
-            max_output_tokens=500
-        ),
-        "gpt35-balanced": LangfuseConfig(
-            model="gpt-3.5-turbo",
-            temperature=0.7,
-            max_output_tokens=1500
-        ),
-        # GPT-5 examples (no temperature)
+        # GPT-5 standard variants
         "gpt5-minimal": LangfuseConfig(
             model="gpt-5",
             max_output_tokens=600,
             verbosity="low",
             reasoning_effort="minimal"
+        ),
+        "gpt5-concise": LangfuseConfig(
+            model="gpt-5",
+            max_output_tokens=800,
+            verbosity="low",
+            reasoning_effort="medium"
+        ),
+        "gpt5-compact": LangfuseConfig(
+            model="gpt-5",
+            max_output_tokens=600,
+            verbosity="low",
+            reasoning_effort="high"
         ),
         "gpt5-standard": LangfuseConfig(
             model="gpt-5",
@@ -255,9 +255,33 @@ def create_default_configs() -> Dict[str, LangfuseConfig]:
             verbosity="medium",
             reasoning_effort="medium"
         ),
+        "gpt5-balanced-high-reasoning": LangfuseConfig(
+            model="gpt-5",
+            max_output_tokens=1500,
+            verbosity="medium",
+            reasoning_effort="high"
+        ),
+        "gpt5-detailed": LangfuseConfig(
+            model="gpt-5",
+            max_output_tokens=2000,
+            verbosity="high",
+            reasoning_effort="medium"
+        ),
+        "gpt5-verbose": LangfuseConfig(
+            model="gpt-5",
+            max_output_tokens=2500,
+            verbosity="high",
+            reasoning_effort="minimal"
+        ),
         "gpt5-thorough": LangfuseConfig(
             model="gpt-5",
             max_output_tokens=3000,
+            verbosity="high",
+            reasoning_effort="high"
+        ),
+        "gpt5-extended": LangfuseConfig(
+            model="gpt-5",
+            max_output_tokens=4000,
             verbosity="high",
             reasoning_effort="high"
         ),

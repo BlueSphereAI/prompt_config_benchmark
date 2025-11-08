@@ -1,0 +1,12 @@
+category: text-processing
+description: Summarize a given text
+name: summarize
+tags:
+- summarization
+- text
+template: 'Please summarize the following text concisely:
+
+
+  {text}'
+variables:
+  text: ''
