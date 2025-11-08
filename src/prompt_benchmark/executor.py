@@ -8,7 +8,7 @@ import os
 import time
 import uuid
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from openai import OpenAI
 from openai.types.chat import ChatCompletion
@@ -79,28 +79,14 @@ class ExperimentExecutor:
         # Generate experiment ID
         experiment_id = str(uuid.uuid4())
 
-        # Render the prompt
-        prompt_variables = prompt_variables or {}
-        try:
-            rendered_prompt = prompt.render(**prompt_variables)
-        except KeyError as e:
-            return ExperimentResult(
-                experiment_id=experiment_id,
-                prompt_name=prompt.name,
-                config_name=config_name,
-                rendered_prompt="",
-                config=config,
-                response="",
-                start_time=datetime.utcnow(),
-                end_time=datetime.utcnow(),
-                duration_seconds=0.0,
-                error=f"Failed to render prompt: {e}",
-                success=False,
-                metadata=metadata or {}
-            )
+        # Get messages from prompt
+        messages = prompt.get_messages()
+
+        # Store rendered prompt as string for display
+        rendered_prompt = prompt.to_string()
 
         # Prepare API call parameters
-        api_params = self._prepare_api_params(config, rendered_prompt)
+        api_params = self._prepare_api_params(config, messages)
 
         # Execute with timing
         start_time = datetime.utcnow()
@@ -146,20 +132,20 @@ class ExperimentExecutor:
 
         return result
 
-    def _prepare_api_params(self, config: LangfuseConfig, prompt_text: str) -> Dict:
+    def _prepare_api_params(self, config: LangfuseConfig, messages: List[Dict[str, str]]) -> Dict:
         """
         Prepare OpenAI API parameters from Langfuse config.
 
         Args:
             config: Langfuse configuration
-            prompt_text: The rendered prompt
+            messages: List of message dictionaries with role and content
 
         Returns:
             Dictionary of API parameters
         """
         params = {
             "model": config.model,
-            "messages": [{"role": "user", "content": prompt_text}],
+            "messages": messages,
         }
 
         # Add optional parameters if present

@@ -81,22 +81,36 @@ class Prompt(BaseModel):
     """
     A prompt definition with metadata.
 
-    Prompts can include variables using {variable_name} syntax.
+    Supports OpenAI messages format (list of message dicts with role and content).
     """
     name: str = Field(..., description="Unique identifier for the prompt")
-    template: str = Field(..., description="The prompt text, may include {variables}")
+    messages: List[Dict[str, str]] = Field(
+        ...,
+        description="List of message objects with 'role' and 'content' keys"
+    )
     description: Optional[str] = Field(None, description="Human-readable description")
     category: Optional[str] = Field(None, description="Category or type of prompt")
     tags: List[str] = Field(default_factory=list, description="Tags for organization")
-    variables: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Default variable values"
-    )
 
-    def render(self, **kwargs) -> str:
-        """Render the prompt template with provided variables."""
-        variables = {**self.variables, **kwargs}
-        return self.template.format(**variables)
+    def get_messages(self) -> List[Dict[str, str]]:
+        """
+        Get the messages for the prompt.
+
+        Returns:
+            List of message dictionaries with role and content
+        """
+        return self.messages
+
+    def to_string(self) -> str:
+        """
+        Convert messages to a single string for display/storage.
+
+        Returns:
+            Concatenated string of all message content
+        """
+        return "\n\n".join(
+            f"[{msg['role']}]\n{msg['content']}" for msg in self.messages
+        )
 
 
 class Experiment(BaseModel):

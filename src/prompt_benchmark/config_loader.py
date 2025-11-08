@@ -118,7 +118,11 @@ class PromptLoader:
     @staticmethod
     def load_prompt_from_file(file_path: Union[str, Path]) -> Prompt:
         """
-        Load a prompt definition from a JSON or YAML file.
+        Load a prompt definition from a JSON file.
+
+        The file should contain either:
+        1. A list of message objects (OpenAI messages format)
+        2. A dict with 'name', 'messages', and optional metadata
 
         Args:
             file_path: Path to the prompt file
@@ -135,13 +139,15 @@ class PromptLoader:
             raise FileNotFoundError(f"Prompt file not found: {file_path}")
 
         with open(file_path, 'r') as f:
-            if file_path.suffix in ['.yaml', '.yml']:
-                data = yaml.safe_load(f)
-            elif file_path.suffix == '.json':
-                data = json.load(f)
-            else:
-                raise ValueError(f"Unsupported file format: {file_path.suffix}")
+            data = json.load(f)
 
+        # If data is a list, it's just the messages array
+        if isinstance(data, list):
+            # Extract name from filename
+            prompt_name = file_path.stem
+            return Prompt(name=prompt_name, messages=data)
+
+        # Otherwise, expect a dict with name and messages
         return Prompt(**data)
 
     @staticmethod
@@ -160,14 +166,14 @@ class PromptLoader:
     @staticmethod
     def load_prompts_from_directory(
         directory: Union[str, Path],
-        pattern: str = "*.yaml"
+        pattern: str = "*.json"
     ) -> Dict[str, Prompt]:
         """
         Load all prompt files from a directory.
 
         Args:
             directory: Path to directory containing prompt files
-            pattern: Glob pattern for prompt files (default: *.yaml)
+            pattern: Glob pattern for prompt files (default: *.json)
 
         Returns:
             Dictionary mapping prompt names to Prompt instances
@@ -190,7 +196,7 @@ class PromptLoader:
         indent: int = 2
     ) -> None:
         """
-        Save a prompt definition to a file.
+        Save a prompt definition to a JSON file.
 
         Args:
             prompt: Prompt to save
@@ -203,10 +209,7 @@ class PromptLoader:
         data = prompt.model_dump(exclude_none=True)
 
         with open(file_path, 'w') as f:
-            if file_path.suffix in ['.yaml', '.yml']:
-                yaml.dump(data, f, default_flow_style=False, indent=indent)
-            else:
-                json.dump(data, f, indent=indent)
+            json.dump(data, f, indent=indent)
 
 
 def create_default_configs() -> Dict[str, LangfuseConfig]:
@@ -291,43 +294,59 @@ def create_default_configs() -> Dict[str, LangfuseConfig]:
 
 def create_example_prompts() -> Dict[str, Prompt]:
     """
-    Create example prompts for testing.
+    Create example prompts for testing in OpenAI messages format.
 
     Returns:
         Dictionary of example prompts
     """
     prompts = {
-        "summarize": Prompt(
-            name="summarize",
-            template="Please summarize the following text concisely:\n\n{text}",
-            description="Summarize a given text",
+        "simple-summary": Prompt(
+            name="simple-summary",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant that creates concise summaries."
+                },
+                {
+                    "role": "user",
+                    "content": "Please summarize the following text in 2-3 sentences:\n\nArtificial intelligence has made remarkable progress in recent years, with breakthroughs in natural language processing, computer vision, and machine learning. These advances are transforming industries from healthcare to finance."
+                }
+            ],
+            description="Simple text summarization",
             category="text-processing",
-            tags=["summarization", "text"],
-            variables={"text": ""}
+            tags=["summarization", "text"]
         ),
-        "creative-story": Prompt(
-            name="creative-story",
-            template="Write a creative short story about {topic} in {style} style.",
-            description="Generate a creative story",
+        "creative-writing": Prompt(
+            name="creative-writing",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a creative writer specializing in short fiction."
+                },
+                {
+                    "role": "user",
+                    "content": "Write a 100-word story about a robot discovering emotions for the first time."
+                }
+            ],
+            description="Creative story generation",
             category="creative",
-            tags=["creative", "story", "writing"],
-            variables={"topic": "adventure", "style": "fantasy"}
+            tags=["creative", "story", "writing"]
         ),
-        "code-review": Prompt(
-            name="code-review",
-            template="Review the following code and provide feedback:\n\n```{language}\n{code}\n```",
-            description="Review code and provide feedback",
-            category="code",
-            tags=["code", "review", "programming"],
-            variables={"language": "python", "code": ""}
-        ),
-        "explain-concept": Prompt(
-            name="explain-concept",
-            template="Explain {concept} to a {level} audience.",
-            description="Explain a concept at different levels",
+        "technical-explanation": Prompt(
+            name="technical-explanation",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a technical educator who explains complex concepts clearly."
+                },
+                {
+                    "role": "user",
+                    "content": "Explain how neural networks work to a high school student in simple terms."
+                }
+            ],
+            description="Explain technical concepts simply",
             category="education",
-            tags=["education", "explanation"],
-            variables={"concept": "", "level": "beginner"}
+            tags=["education", "explanation", "technical"]
         ),
     }
     return prompts
