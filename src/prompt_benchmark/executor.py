@@ -300,8 +300,9 @@ class ExperimentExecutor:
 
             # Handle different message formats
             if choice.message:
-                if choice.message.content:
-                    response_text = choice.message.content
+                # Accept content even if empty string (to capture it properly)
+                if choice.message.content is not None:
+                    response_text = choice.message.content if choice.message.content else ""
                 # Some models might use refusal or other fields
                 elif hasattr(choice.message, 'refusal') and choice.message.refusal:
                     response_text = f"[REFUSAL] {choice.message.refusal}"
