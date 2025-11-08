@@ -152,8 +152,12 @@ class ExperimentExecutor:
         if config.temperature is not None and not config.model.startswith("gpt-5"):
             params["temperature"] = config.temperature
 
+        # GPT-5 uses max_completion_tokens, other models use max_tokens
         if config.max_output_tokens is not None:
-            params["max_tokens"] = config.max_output_tokens
+            if config.model.startswith("gpt-5"):
+                params["max_completion_tokens"] = config.max_output_tokens
+            else:
+                params["max_tokens"] = config.max_output_tokens
 
         if config.top_p is not None:
             params["top_p"] = config.top_p
@@ -164,9 +168,16 @@ class ExperimentExecutor:
         if config.presence_penalty is not None:
             params["presence_penalty"] = config.presence_penalty
 
-        # GPT-5 specific parameters (if supported in future API)
-        # Currently these would go in model config or be handled differently
-        # Keeping them in the config for tracking purposes
+        # GPT-5 specific parameters
+        # Note: verbosity and reasoning_effort are stored in config but
+        # the actual API parameters may differ - adjust based on OpenAI docs
+        if config.model.startswith("gpt-5"):
+            if config.verbosity is not None:
+                # Map to actual API parameter when available
+                pass  # TODO: Update when API supports this
+            if config.reasoning_effort is not None:
+                # Map to actual API parameter when available
+                pass  # TODO: Update when API supports this
 
         return params
 
