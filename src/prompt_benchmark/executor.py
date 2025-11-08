@@ -4,13 +4,14 @@ Experiment executor for running LLM prompts with timing and metrics collection.
 Handles OpenAI API calls, measures performance, and captures results.
 """
 
+import asyncio
 import os
 import time
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from openai import OpenAI
+from openai import AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletion
 
 from .models import (
@@ -54,6 +55,7 @@ class ExperimentExecutor:
             raise ValueError("OpenAI API key not provided and OPENAI_API_KEY not set")
 
         self.client = OpenAI(api_key=self.api_key)
+        self.async_client = AsyncOpenAI(api_key=self.api_key)
 
     def run_experiment(
         self,
@@ -94,6 +96,83 @@ class ExperimentExecutor:
 
         try:
             completion = self.client.chat.completions.create(**api_params)
+            end_perf = time.perf_counter()
+            end_time = datetime.utcnow()
+
+            # Extract response and metrics
+            result = self._extract_result(
+                experiment_id=experiment_id,
+                prompt_name=prompt.name,
+                config_name=config_name,
+                rendered_prompt=rendered_prompt,
+                config=config,
+                completion=completion,
+                start_time=start_time,
+                end_time=end_time,
+                duration_seconds=end_perf - start_perf,
+                metadata=metadata or {}
+            )
+
+        except Exception as e:
+            end_perf = time.perf_counter()
+            end_time = datetime.utcnow()
+
+            result = ExperimentResult(
+                experiment_id=experiment_id,
+                prompt_name=prompt.name,
+                config_name=config_name,
+                rendered_prompt=rendered_prompt,
+                config=config,
+                response="",
+                start_time=start_time,
+                end_time=end_time,
+                duration_seconds=end_perf - start_perf,
+                error=str(e),
+                success=False,
+                metadata=metadata or {}
+            )
+
+        return result
+
+    async def run_experiment_async(
+        self,
+        prompt: Prompt,
+        config: LangfuseConfig,
+        config_name: str,
+        prompt_variables: Optional[Dict] = None,
+        metadata: Optional[Dict] = None
+    ) -> ExperimentResult:
+        """
+        Run a single experiment asynchronously.
+
+        Args:
+            prompt: The prompt to use
+            config: The LLM configuration
+            config_name: Human-readable name for this config
+            prompt_variables: Variables to fill in the prompt template (unused for messages format)
+            metadata: Additional metadata to store
+
+        Returns:
+            ExperimentResult with timing and metrics
+        """
+        # Generate experiment ID
+        experiment_id = str(uuid.uuid4())
+
+        # Get messages from prompt
+        messages = prompt.get_messages()
+
+        # Store rendered prompt as string for display
+        rendered_prompt = prompt.to_string()
+
+        # Prepare API call parameters
+        api_params = self._prepare_api_params(config, messages)
+
+        # Execute with timing
+        start_time = datetime.utcnow()
+        start_perf = time.perf_counter()
+
+        try:
+            completion = await self.async_client.chat.completions.create(**api_params)
             end_perf = time.perf_counter()
             end_time = datetime.utcnow()
 
@@ -297,7 +376,7 @@ class ExperimentExecutor:
         metadata: Optional[Dict] = None
     ) -> Dict[str, ExperimentResult]:
         """
-        Run multiple experiments with different configs on the same prompt.
+        Run multiple experiments with different configs on the same prompt in parallel.
 
         Args:
             prompt: The prompt to use
@@ -308,16 +387,46 @@ class ExperimentExecutor:
         Returns:
             Dictionary mapping config names to results
         """
-        results = {}
+        return asyncio.run(self.run_batch_async(prompt, configs, prompt_variables, metadata))
+
+    async def run_batch_async(
+        self,
+        prompt: Prompt,
+        configs: Dict[str, LangfuseConfig],
+        prompt_variables: Optional[Dict] = None,
+        metadata: Optional[Dict] = None
+    ) -> Dict[str, ExperimentResult]:
+        """
+        Run multiple experiments with different configs on the same prompt in parallel (async).
+
+        Args:
+            prompt: The prompt to use
+            configs: Dictionary mapping config names to LangfuseConfig instances
+            prompt_variables: Variables for the prompt
+            metadata: Additional metadata
+
+        Returns:
+            Dictionary mapping config names to results
+        """
+        # Create tasks for all experiments
+        tasks = []
+        config_names = []
         for config_name, config in configs.items():
-            result = self.run_experiment(
+            task = self.run_experiment_async(
                 prompt=prompt,
                 config=config,
                 config_name=config_name,
                 prompt_variables=prompt_variables,
                 metadata=metadata
             )
-            results[config_name] = result
+            tasks.append(task)
+            config_names.append(config_name)
+
+        # Run all tasks in parallel
+        results_list = await asyncio.gather(*tasks)
+
+        # Map results back to config names
+        results = {name: result for name, result in zip(config_names, results_list)}
 
         return results
 
@@ -328,7 +437,7 @@ class ExperimentExecutor:
         prompt_variables: Optional[Dict[str, Dict]] = None
     ) -> Dict[str, Dict[str, ExperimentResult]]:
         """
-        Run a full benchmark: all configs on all prompts.
+        Run a full benchmark: all configs on all prompts in parallel.
 
         Args:
             prompts: Dictionary of prompts
@@ -338,16 +447,44 @@ class ExperimentExecutor:
         Returns:
             Nested dict: {prompt_name: {config_name: result}}
         """
-        all_results = {}
+        return asyncio.run(self.run_full_benchmark_async(prompts, configs, prompt_variables))
+
+    async def run_full_benchmark_async(
+        self,
+        prompts: Dict[str, Prompt],
+        configs: Dict[str, LangfuseConfig],
+        prompt_variables: Optional[Dict[str, Dict]] = None
+    ) -> Dict[str, Dict[str, ExperimentResult]]:
+        """
+        Run a full benchmark: all configs on all prompts in parallel (async).
+
+        Args:
+            prompts: Dictionary of prompts
+            configs: Dictionary of configs
+            prompt_variables: Optional dict mapping prompt names to their variables
+
+        Returns:
+            Nested dict: {prompt_name: {config_name: result}}
+        """
         prompt_variables = prompt_variables or {}
 
+        # Create tasks for all prompt batches
+        tasks = []
+        prompt_names = []
         for prompt_name, prompt in prompts.items():
             variables = prompt_variables.get(prompt_name, {})
-            prompt_results = self.run_batch(
+            task = self.run_batch_async(
                 prompt=prompt,
                 configs=configs,
                 prompt_variables=variables
             )
-            all_results[prompt_name] = prompt_results
+            tasks.append(task)
+            prompt_names.append(prompt_name)
+
+        # Run all prompt batches in parallel
+        results_list = await asyncio.gather(*tasks)
+
+        # Map results back to prompt names
+        all_results = {name: results for name, results in zip(prompt_names, results_list)}
 
         return all_results
