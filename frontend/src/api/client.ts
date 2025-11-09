@@ -220,4 +220,12 @@ export const api = {
       method: 'POST',
     });
   },
+
+  // Experiment Acceptability
+  async updateExperimentAcceptability(experimentId: string, isAcceptable: boolean): Promise<any> {
+    return fetchAPI(`/experiments/${experimentId}/acceptability`, {
+      method: 'PUT',
+      body: JSON.stringify({ is_acceptable: isAcceptable }),
+    });
+  },
 };

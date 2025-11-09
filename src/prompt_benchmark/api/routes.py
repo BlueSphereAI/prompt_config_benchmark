@@ -21,6 +21,7 @@ from prompt_benchmark.api.schemas import (
     ExperimentResponse,
     EvaluationResponse,
     EvaluationCreate,
+    ExperimentAcceptabilityUpdate,
     ConfigComparison,
     OverallRankings,
     DashboardStats,
@@ -98,6 +99,7 @@ def get_experiments(
                 "estimated_cost_usd": result.estimated_cost_usd,
                 "error": result.error,
                 "success": result.success,
+                "is_acceptable": result.is_acceptable,
                 "metadata_json": json.loads(result.metadata_json) if result.metadata_json else None,
                 "created_at": result.created_at,
             }
@@ -138,11 +140,27 @@ def get_experiment(
             "estimated_cost_usd": db_result.estimated_cost_usd,
             "error": db_result.error,
             "success": db_result.success,
+            "is_acceptable": db_result.is_acceptable,
             "metadata_json": json.loads(db_result.metadata_json) if db_result.metadata_json else None,
             "created_at": db_result.created_at,
         }
 
         return ExperimentResponse(**exp_dict)
+
+
+@router.put("/experiments/{experiment_id}/acceptability")
+def update_experiment_acceptability(
+    experiment_id: str,
+    update: ExperimentAcceptabilityUpdate,
+    storage: ResultStorage = Depends(get_storage),
+):
+    """Update the acceptability status of an experiment."""
+    success = storage.update_experiment_acceptability(experiment_id, update.is_acceptable)
+
+    if not success:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    return {"success": True, "experiment_id": experiment_id, "is_acceptable": update.is_acceptable}
 
 
 @router.get("/prompts", response_model=List[str])
@@ -589,6 +607,7 @@ def get_compare_data(
             "total_tokens": exp.total_tokens or 0,
             "finish_reason": exp.finish_reason,
             "success": exp.success,
+            "is_acceptable": exp.is_acceptable,
         })
 
     # Get AI evaluations
@@ -951,20 +970,30 @@ def list_configs(
         stmt = stmt.order_by(DBLLMConfig.created_at.desc())
         db_configs = session.execute(stmt).scalars().all()
 
-        return [
-            LLMConfigResponse(
-                name=c.name,
-                model=c.model,
-                max_output_tokens=c.max_output_tokens,
-                verbosity=c.verbosity,
-                reasoning_effort=c.reasoning_effort,
-                description=c.description,
-                created_at=c.created_at,
-                updated_at=c.updated_at,
-                is_active=c.is_active
+        # Count unacceptable experiments for each config
+        config_responses = []
+        for c in db_configs:
+            unacceptable_count = session.query(DBExperimentResult).filter(
+                DBExperimentResult.config_name == c.name,
+                DBExperimentResult.is_acceptable == False
+            ).count()
+
+            config_responses.append(
+                LLMConfigResponse(
+                    name=c.name,
+                    model=c.model,
+                    max_output_tokens=c.max_output_tokens,
+                    verbosity=c.verbosity,
+                    reasoning_effort=c.reasoning_effort,
+                    description=c.description,
+                    created_at=c.created_at,
+                    updated_at=c.updated_at,
+                    is_active=c.is_active,
+                    unacceptable_count=unacceptable_count
+                )
             )
-            for c in db_configs
-        ]
+
+        return config_responses
 
 
 @router.get("/configs/get/{name}", response_model=LLMConfigResponse)

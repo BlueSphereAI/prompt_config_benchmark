@@ -18,7 +18,7 @@ export default function Compare() {
   const [isEvaluating, setIsEvaluating] = useState(false);
 
   // Fetch all compare data
-  const { data: compareData, isLoading, error } = useQuery({
+  const { data: compareData, isLoading, error, refetch } = useQuery({
     queryKey: ['compare', promptName],
     queryFn: () => api.getCompareData(promptName!),
     enabled: !!promptName,
@@ -29,6 +29,19 @@ export default function Compare() {
     queryKey: ['review-prompts'],
     queryFn: () => api.getReviewPrompts(true),
   });
+
+  // Toggle acceptability mutation
+  const toggleAcceptability = useMutation({
+    mutationFn: ({ experimentId, isAcceptable }: { experimentId: string; isAcceptable: boolean }) =>
+      api.updateExperimentAcceptability(experimentId, isAcceptable),
+    onSuccess: async () => {
+      await refetch();
+    },
+  });
+
+  const handleToggleAcceptability = (experimentId: string, isAcceptable: boolean) => {
+    toggleAcceptability.mutate({ experimentId, isAcceptable });
+  };
 
   const startAIEvaluation = useMutation({
     mutationFn: (params: { prompt_name: string; review_prompt_id: string; model_evaluator: string }) => {
@@ -68,18 +81,19 @@ export default function Compare() {
 
   useEffect(() => {
     if (compareData && compareData.experiments) {
-      // Initialize with AI ranking or default order
-      const initialOrder = compareData.ai_evaluation?.ranked_experiment_ids
-        || compareData.experiments.map((exp: any) => exp.experiment_id);
-
-      setRankedIds(initialOrder);
+      // Only initialize rankedIds if it's empty (first load)
+      if (rankedIds.length === 0) {
+        const initialOrder = compareData.ai_evaluation?.ranked_experiment_ids
+          || compareData.experiments.map((exp: any) => exp.experiment_id);
+        setRankedIds(initialOrder);
+      }
 
       // Stop evaluating spinner if AI evaluation is complete
       if (compareData.ai_evaluation && isEvaluating) {
         setIsEvaluating(false);
       }
     }
-  }, [compareData, isEvaluating]);
+  }, [compareData, isEvaluating, rankedIds.length]);
 
   const handleReorder = (newOrder: string[]) => {
     setRankedIds(newOrder);
@@ -148,10 +162,22 @@ export default function Compare() {
     ]) || []
   );
 
-  // Order experiments by current ranking
-  const orderedExperiments = rankedIds
-    .map((id) => compareData.experiments.find((exp: any) => exp.experiment_id === id))
+  // Order experiments by current ranking, with acceptable first, unacceptable last
+  // Force new object creation to avoid React Query structural sharing issues
+  const allExperiments = rankedIds
+    .map((id) => {
+      const exp = compareData.experiments.find((e: any) => e.experiment_id === id);
+      // Create a new object to break any cached references
+      return exp ? { ...exp } : null;
+    })
     .filter(Boolean);
+
+  // Separate acceptable and unacceptable
+  const acceptable = allExperiments.filter((exp: any) => exp.is_acceptable !== false);
+  const unacceptable = allExperiments.filter((exp: any) => exp.is_acceptable === false);
+
+  // Combine: acceptable first, then unacceptable
+  const orderedExperiments = [...acceptable, ...unacceptable];
 
   // Calculate changes from AI
   const changes = rankedIds
@@ -257,6 +283,7 @@ export default function Compare() {
           experiments={orderedExperiments}
           aiEvaluations={aiEvalMap}
           onReorder={handleReorder}
+          onToggleAcceptability={handleToggleAcceptability}
         />
       )}
 

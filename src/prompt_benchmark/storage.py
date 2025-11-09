@@ -67,6 +67,9 @@ class DBExperimentResult(Base):
     error = Column(Text, nullable=True)
     success = Column(Boolean, nullable=False)
 
+    # Acceptability flag
+    is_acceptable = Column(Boolean, nullable=False, default=True)
+
     # Metadata (JSON serialized)
     metadata_json = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
@@ -284,6 +287,7 @@ class ResultStorage:
                 estimated_cost_usd=result.estimated_cost_usd,
                 error=result.error,
                 success=result.success,
+                is_acceptable=result.is_acceptable,
                 metadata_json=json.dumps(result.metadata) if result.metadata else None,
                 created_at=result.created_at
             )
@@ -365,6 +369,30 @@ class ResultStorage:
             stmt = select(DBExperimentResult)
             db_results = session.execute(stmt).scalars().all()
             return [self._db_result_to_model(r) for r in db_results]
+
+    def update_experiment_acceptability(self, experiment_id: str, is_acceptable: bool) -> bool:
+        """
+        Update the acceptability status of an experiment.
+
+        Args:
+            experiment_id: The experiment ID
+            is_acceptable: Whether the result is acceptable
+
+        Returns:
+            True if updated successfully, False if experiment not found
+        """
+        with Session(self.engine) as session:
+            stmt = select(DBExperimentResult).where(
+                DBExperimentResult.experiment_id == experiment_id
+            )
+            db_result = session.execute(stmt).scalar_one_or_none()
+
+            if not db_result:
+                return False
+
+            db_result.is_acceptable = is_acceptable
+            session.commit()
+            return True
 
     def save_evaluation(self, evaluation: Evaluation) -> int:
         """
@@ -476,6 +504,7 @@ class ResultStorage:
             estimated_cost_usd=db_result.estimated_cost_usd,
             error=db_result.error,
             success=db_result.success,
+            is_acceptable=db_result.is_acceptable,
             metadata=json.loads(db_result.metadata_json) if db_result.metadata_json else {},
             created_at=db_result.created_at
         )

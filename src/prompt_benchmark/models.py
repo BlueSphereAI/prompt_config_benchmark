@@ -169,6 +169,9 @@ class ExperimentResult(BaseModel):
     error: Optional[str] = Field(None, description="Error message if request failed")
     success: bool = Field(..., description="Whether the request succeeded")
 
+    # Acceptability
+    is_acceptable: bool = Field(True, description="Whether this result is acceptable")
+
     # Metadata
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)

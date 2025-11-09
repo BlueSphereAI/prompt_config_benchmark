@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -23,6 +23,7 @@ interface Experiment {
   duration_seconds: number;
   estimated_cost_usd: number;
   total_tokens: number;
+  is_acceptable?: boolean;
 }
 
 interface AIEvaluation {
@@ -36,16 +37,19 @@ interface DragCarouselProps {
   experiments: Experiment[];
   aiEvaluations?: Map<string, AIEvaluation>;
   onReorder: (newOrder: string[]) => void;
+  onToggleAcceptability?: (experimentId: string, isAcceptable: boolean) => void;
 }
 
 function SortableCard({
   experiment,
   rank,
   aiEval,
+  onToggleAcceptability,
 }: {
   experiment: Experiment;
   rank: number;
   aiEval?: AIEvaluation;
+  onToggleAcceptability?: (experimentId: string, isAcceptable: boolean) => void;
 }) {
   const {
     attributes,
@@ -71,6 +75,7 @@ function SortableCard({
         aiComment={aiEval?.justification}
         isDragging={isDragging}
         dragHandleProps={listeners}
+        onToggleAcceptability={onToggleAcceptability}
       />
     </div>
   );
@@ -80,8 +85,14 @@ export function DragCarousel({
   experiments,
   aiEvaluations,
   onReorder,
+  onToggleAcceptability,
 }: DragCarouselProps) {
   const [items, setItems] = useState(experiments);
+
+  // Update items when experiments prop changes (e.g., after acceptability toggle)
+  useEffect(() => {
+    setItems(experiments);
+  }, [experiments]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -123,6 +134,7 @@ export function DragCarousel({
                 experiment={exp}
                 rank={index + 1}
                 aiEval={aiEvaluations?.get(exp.experiment_id)}
+                onToggleAcceptability={onToggleAcceptability}
               />
             ))}
           </div>

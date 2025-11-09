@@ -12,6 +12,7 @@ interface LLMConfig {
   created_at: string;
   updated_at: string;
   is_active: boolean;
+  unacceptable_count: number;
 }
 
 export function Configs() {
@@ -159,6 +160,9 @@ export function Configs() {
                   <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
                     Max Tokens
                   </th>
+                  <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
+                    Unacceptable
+                  </th>
                   <th className="relative py-3.5 pl-3 pr-4 sm:pr-0">
                     <span className="sr-only">Actions</span>
                   </th>
@@ -181,6 +185,15 @@ export function Configs() {
                     </td>
                     <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
                       {config.max_output_tokens?.toLocaleString() || '-'}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+                      {config.unacceptable_count > 0 ? (
+                        <span className="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800">
+                          {config.unacceptable_count}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">0</span>
+                      )}
                     </td>
                     <td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-0">
                       <div className="flex gap-2 justify-end">

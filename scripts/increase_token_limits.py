@@ -20,12 +20,12 @@ def increase_token_limits():
 
     # Token limit increases
     updates = {
-        # gpt5-mini: 3000 -> 5000
-        "gpt5-mini": 5000,
-        # gpt5-nano: 2000 -> 3500
-        "gpt5-nano": 3500,
-        # gpt5-detailed: 5000 -> 8000
-        "gpt5-detailed": 8000,
+        # gpt5: -> 10000
+        "gpt5-standard": 10000,
+        # gpt5-mini: -> 8000
+        "gpt5-mini": 8000,
+        # gpt5-nano: -> 10000
+        "gpt5-nano": 10000,
     }
 
     print("🔧 Updating token limits for configs with length failures...\n")
@@ -65,9 +65,9 @@ def increase_token_limits():
 
     # Show summary
     print("\n📊 Summary of updates:")
-    print(f"  • gpt5-mini-* configs: 3,000 -> 5,000 tokens")
-    print(f"  • gpt5-nano-* configs: 2,000 -> 3,500 tokens")
-    print(f"  • gpt5-detailed config: 5,000 -> 8,000 tokens")
+    print(f"  • gpt5-standard-* configs: -> 10,000 tokens")
+    print(f"  • gpt5-mini-* configs: -> 8,000 tokens")
+    print(f"  • gpt5-nano-* configs: -> 10,000 tokens")
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ class ExperimentResponse(BaseModel):
     estimated_cost_usd: float
     error: Optional[str]
     success: bool
+    is_acceptable: bool
     metadata_json: Optional[Dict[str, Any]]
     created_at: datetime
 
@@ -61,6 +62,11 @@ class EvaluationCreate(BaseModel):
     strengths: Optional[str] = None
     weaknesses: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
+
+
+class ExperimentAcceptabilityUpdate(BaseModel):
+    """Request model for updating experiment acceptability."""
+    is_acceptable: bool
 
 
 class ConfigStats(BaseModel):
@@ -127,6 +133,7 @@ class LLMConfigResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     is_active: bool
+    unacceptable_count: int = 0
 
 
 class LLMConfigCreate(BaseModel):

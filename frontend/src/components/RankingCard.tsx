@@ -6,6 +6,7 @@ interface RankingCardProps {
     duration_seconds: number;
     estimated_cost_usd: number;
     total_tokens: number;
+    is_acceptable?: boolean;
   };
   rank: number;
   aiScore?: number;
@@ -13,6 +14,7 @@ interface RankingCardProps {
   aiComment?: string;
   isDragging: boolean;
   dragHandleProps?: any;
+  onToggleAcceptability?: (experimentId: string, isAcceptable: boolean) => void;
 }
 
 const getRankBadge = (rank: number) => {
@@ -32,19 +34,29 @@ export function RankingCard({
   aiComment,
   isDragging,
   dragHandleProps,
+  onToggleAcceptability,
 }: RankingCardProps) {
   const badge = getRankBadge(rank);
+  const isAcceptable = experiment.is_acceptable !== false;
+
+  const handleToggle = (e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent drag behavior when clicking toggle
+    e.preventDefault(); // Prevent any default behavior
+    if (onToggleAcceptability) {
+      onToggleAcceptability(experiment.experiment_id, !isAcceptable);
+    }
+  };
 
   return (
     <div
       className={`
         w-full h-[900px]
-        bg-white rounded-lg shadow-md border border-gray-200
+        bg-white rounded-lg shadow-md
+        ${isAcceptable ? 'border border-gray-200' : 'border-2 border-red-400'}
         flex flex-col
         transition-all duration-300
-        ${isDragging ? 'scale-105 shadow-2xl opacity-80 rotate-2' : 'hover:shadow-lg cursor-grab active:cursor-grabbing'}
+        ${isDragging ? 'scale-105 shadow-2xl opacity-80 rotate-2' : 'hover:shadow-lg'}
       `}
-      {...dragHandleProps}
     >
       {/* Header - Sticky */}
       <div
@@ -55,7 +67,7 @@ export function RankingCard({
           sticky top-0 z-10
         `}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 cursor-grab active:cursor-grabbing" {...dragHandleProps}>
           <span className="text-2xl">{badge.emoji}</span>
           <div>
             <div className="font-bold text-lg">RANK #{rank}</div>
@@ -64,15 +76,34 @@ export function RankingCard({
             </div>
           </div>
         </div>
-        {aiScore !== undefined && (
-          <div className="text-right">
-            <div className="text-xs text-gray-600">AI Score</div>
-            <div className="text-lg font-bold">{aiScore.toFixed(1)}/10</div>
-            {aiRank !== undefined && aiRank !== rank && (
-              <div className="text-xs text-orange-600">AI: #{aiRank}</div>
-            )}
-          </div>
-        )}
+        <div className="flex items-center gap-3">
+          {aiScore !== undefined && (
+            <div className="text-right">
+              <div className="text-xs text-gray-600">AI Score</div>
+              <div className="text-lg font-bold">{aiScore.toFixed(1)}/10</div>
+              {aiRank !== undefined && aiRank !== rank && (
+                <div className="text-xs text-orange-600">AI: #{aiRank}</div>
+              )}
+            </div>
+          )}
+          {onToggleAcceptability && (
+            <button
+              onClick={handleToggle}
+              onMouseDown={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
+              className={`
+                px-3 py-1.5 rounded text-xs font-medium cursor-pointer
+                transition-colors duration-200
+                ${isAcceptable
+                  ? 'bg-green-100 text-green-800 hover:bg-green-200 border border-green-300'
+                  : 'bg-red-100 text-red-800 hover:bg-red-200 border border-red-300'}
+              `}
+              title={isAcceptable ? 'Mark as unacceptable' : 'Mark as acceptable'}
+            >
+              {isAcceptable ? '✓ Acceptable' : '✗ Unacceptable'}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* AI Comment Section */}
