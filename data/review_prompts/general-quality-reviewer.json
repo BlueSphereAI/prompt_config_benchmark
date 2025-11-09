@@ -1,0 +1,8 @@
+{
+  "name": "General Quality Reviewer",
+  "description": "General purpose evaluator for any type of LLM output",
+  "template": "You are an expert evaluator ranking different LLM configurations.\n\nORIGINAL PROMPT:\n{original_prompt}\n\nYou will evaluate {num_configs} different configurations. Each produced a response to the prompt above.\n\n{all_responses}\n\nRANK these configurations from BEST to WORST based on:\n1. RELEVANCE: How well does it address the original prompt?\n2. ACCURACY: Is the information correct and factual?\n3. CLARITY: Is the response clear and easy to understand?\n4. COMPLETENESS: Does it fully answer the question?\n5. COHERENCE: Is the response well-organized and logical?\n\nProvide your evaluation in the following JSON format:\n{{\n  \"rankings\": [\n    {{\n      \"config_name\": \"<name of best config>\",\n      \"rank\": 1,\n      \"overall_score\": <score 1-10>,\n      \"comment\": \"<1-2 sentence succinct explanation of why this ranked here>\",\n      \"criteria_scores\": {{\n        \"relevance\": <1-10>,\n        \"accuracy\": <1-10>,\n        \"clarity\": <1-10>,\n        \"completeness\": <1-10>,\n        \"coherence\": <1-10>\n      }}\n    }},\n    ... (continue for all configs, ordered best to worst)\n  ]\n}}",
+  "system_prompt": "You are an objective evaluator of language model outputs. Provide balanced, comparative assessments. When ranking, consider the relative quality of responses - the best response should score highest, even if none are perfect.",
+  "criteria": ["relevance", "accuracy", "clarity", "completeness", "coherence"],
+  "default_model": "gpt-5"
+}

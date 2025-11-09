@@ -2,23 +2,30 @@
 Evaluation system for scoring experiment results.
 
 Supports both human evaluation (via CLI) and AI evaluation (using LLM as judge).
+Includes batch AI evaluation system with review prompt templates.
 """
 
+import asyncio
+import json
 import os
+import time
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from openai import OpenAI
+from openai import AsyncOpenAI, OpenAI
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt as RichPrompt, FloatPrompt
 from rich.table import Table
 
 from .models import (
+    AIEvaluation,
+    AIEvaluationBatch,
     Evaluation,
     EvaluationType,
     ExperimentResult,
+    ReviewPrompt,
 )
 from .storage import ResultStorage
 
@@ -385,3 +392,276 @@ Focus on:
                 "score": 5.0,
                 "notes": response_text
             }
+
+
+# ============================================================================
+# Batch AI Evaluation System
+# ============================================================================
+
+
+async def batch_evaluate_prompt(
+    prompt_name: str,
+    review_prompt: ReviewPrompt,
+    evaluator_model: str,
+    storage: ResultStorage,
+    parallel: bool = True  # Kept for API compatibility, but not used with single-call approach
+) -> AIEvaluationBatch:
+    """
+    Evaluate all experiments for a prompt using AI with comparative ranking.
+
+    Sends ALL responses to the AI in a single call for comparative evaluation.
+
+    Args:
+        prompt_name: Name of prompt to evaluate
+        review_prompt: Review prompt template to use
+        evaluator_model: Model to use for evaluation (e.g., "gpt-5")
+        storage: Database storage
+        parallel: Unused (kept for API compat), evaluation is now single comparative call
+
+    Returns:
+        AIEvaluationBatch with all evaluations and rankings
+    """
+    # 1. Get all successful experiments for this prompt
+    experiments = storage.get_results_by_prompt(prompt_name, success_only=True)
+
+    if not experiments:
+        raise ValueError(f"No successful experiments found for prompt: {prompt_name}")
+
+    # 2. Create batch record
+    batch = AIEvaluationBatch(
+        batch_id=str(uuid.uuid4()),
+        prompt_name=prompt_name,
+        review_prompt_id=review_prompt.prompt_id,
+        model_evaluator=evaluator_model,
+        status="running",
+        num_experiments=len(experiments),
+        num_completed=0,
+        started_at=datetime.utcnow()
+    )
+    storage.save_ai_batch(batch)
+
+    # 3. Build prompt with ALL responses for comparative evaluation
+    # Get the original prompt from first experiment
+    original_prompt = experiments[0].rendered_prompt if experiments else ""
+
+    # Format all responses
+    all_responses_text = ""
+    for i, exp in enumerate(experiments, 1):
+        all_responses_text += f"\n--- CONFIGURATION {i}: {exp.config_name} ---\n"
+        all_responses_text += f"{exp.response}\n"
+
+    # Fill in template variables
+    evaluation_prompt = review_prompt.template.format(
+        original_prompt=original_prompt,
+        num_configs=len(experiments),
+        all_responses=all_responses_text
+    )
+
+    # 4. Make SINGLE API call with ALL responses for comparative ranking
+    try:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not set")
+
+        client = AsyncOpenAI(api_key=api_key)
+
+        # Use GPT-5 with reasoning for best evaluation
+        messages = [
+            {"role": "system", "content": review_prompt.system_prompt},
+            {"role": "user", "content": evaluation_prompt}
+        ]
+
+        # Build API params - GPT-5 doesn't support temperature parameter
+        api_params = {
+            "model": evaluator_model,
+            "messages": messages,
+            "response_format": {"type": "json_object"}
+        }
+
+        # Only add temperature for non-GPT-5 models
+        if not evaluator_model.startswith("gpt-5"):
+            api_params["temperature"] = 0.3
+
+        response = await client.chat.completions.create(**api_params)
+
+        # Parse the comparative rankings
+        result_json = json.loads(response.choices[0].message.content)
+        rankings_list = result_json.get("rankings", [])
+
+        # 5. Create AIEvaluation objects from rankings
+        evaluations = []
+        config_to_experiment = {exp.config_name: exp for exp in experiments}
+
+        for ranking_data in rankings_list:
+            config_name = ranking_data["config_name"]
+            experiment = config_to_experiment.get(config_name)
+
+            if not experiment:
+                console.print(f"[yellow]Warning: AI ranked unknown config: {config_name}[/yellow]")
+                continue
+
+            evaluation = AIEvaluation(
+                evaluation_id=str(uuid.uuid4()),
+                experiment_id=experiment.experiment_id,
+                review_prompt_id=review_prompt.prompt_id,
+                batch_id=batch.batch_id,
+                model_evaluator=evaluator_model,
+                criteria_scores=ranking_data.get("criteria_scores", {}),
+                overall_score=ranking_data.get("overall_score", 5.0),
+                ai_rank=ranking_data.get("rank", 0),
+                justification=ranking_data.get("comment", ""),
+                strengths=[ranking_data.get("comment", "")],  # Store comment as strength
+                weaknesses=[],
+                evaluated_at=datetime.utcnow(),
+                evaluation_duration=0.0  # Single call, not per-experiment timing
+            )
+            evaluations.append(evaluation)
+
+        # 6. Save all evaluations
+        for eval in evaluations:
+            storage.save_ai_evaluation(eval)
+
+        # 7. Update batch as completed
+        batch.status = "completed"
+        batch.num_completed = len(evaluations)
+        batch.completed_at = datetime.utcnow()
+        batch.total_duration = (batch.completed_at - batch.started_at).total_seconds()
+        batch.evaluation_ids = [e.evaluation_id for e in evaluations]
+        batch.ranked_experiment_ids = [e.experiment_id for e in evaluations]
+        storage.update_ai_batch(batch)
+
+        return batch
+
+    except Exception as e:
+        # Update batch as failed
+        batch.status = "failed"
+        batch.completed_at = datetime.utcnow()
+        storage.update_ai_batch(batch)
+        raise ValueError(f"AI evaluation failed: {str(e)}")
+
+
+async def evaluate_single_experiment(
+    experiment: ExperimentResult,
+    review_prompt: ReviewPrompt,
+    evaluator_model: str,
+    batch_id: str,
+    storage: ResultStorage
+) -> AIEvaluation:
+    """
+    Evaluate a single experiment using AI.
+
+    Args:
+        experiment: Experiment to evaluate
+        review_prompt: Review prompt template
+        evaluator_model: Model to use for evaluation
+        batch_id: Batch ID this evaluation belongs to
+        storage: Database storage (for API key)
+
+    Returns:
+        AIEvaluation object
+    """
+    # Render the review prompt
+    rendered_prompt = review_prompt.template.format(
+        original_prompt=experiment.rendered_prompt,
+        config_name=experiment.config_name,
+        result=experiment.response
+    )
+
+    # Call evaluator LLM
+    start_time = time.time()
+
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY environment variable not set")
+
+    client = AsyncOpenAI(api_key=api_key)
+
+    try:
+        # Build API params - GPT-5 doesn't support temperature parameter
+        api_params = {
+            "model": evaluator_model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": review_prompt.system_prompt or "You are an expert evaluator."
+                },
+                {"role": "user", "content": rendered_prompt}
+            ],
+            "response_format": {"type": "json_object"}  # Ensure JSON response
+        }
+
+        # Only add temperature for non-GPT-5 models
+        if not evaluator_model.startswith("gpt-5"):
+            api_params["temperature"] = 0.3  # Lower temperature for more consistent evaluations
+
+        response = await client.chat.completions.create(**api_params)
+
+        duration = time.time() - start_time
+
+        # Parse response
+        eval_data = json.loads(response.choices[0].message.content)
+
+        # Create evaluation object
+        evaluation = AIEvaluation(
+            evaluation_id=str(uuid.uuid4()),
+            experiment_id=experiment.experiment_id,
+            review_prompt_id=review_prompt.prompt_id,
+            batch_id=batch_id,
+            model_evaluator=evaluator_model,
+            criteria_scores=eval_data.get("criteria_scores", {}),
+            overall_score=float(eval_data.get("overall_score", 5.0)),
+            ai_rank=0,  # Will be set later
+            justification=eval_data.get("justification", ""),
+            strengths=eval_data.get("key_strengths", []),
+            weaknesses=eval_data.get("key_weaknesses", []),
+            evaluated_at=datetime.utcnow(),
+            evaluation_duration=duration
+        )
+
+        return evaluation
+
+    except Exception as e:
+        # Return a failed evaluation
+        console.print(f"[red]Evaluation failed for {experiment.config_name}: {e}[/red]")
+        return AIEvaluation(
+            evaluation_id=str(uuid.uuid4()),
+            experiment_id=experiment.experiment_id,
+            review_prompt_id=review_prompt.prompt_id,
+            batch_id=batch_id,
+            model_evaluator=evaluator_model,
+            criteria_scores={},
+            overall_score=0.0,
+            ai_rank=999,
+            justification=f"Evaluation failed: {str(e)}",
+            strengths=[],
+            weaknesses=[],
+            evaluated_at=datetime.utcnow(),
+            evaluation_duration=time.time() - start_time
+        )
+
+
+def run_batch_evaluation(
+    prompt_name: str,
+    review_prompt: ReviewPrompt,
+    evaluator_model: str,
+    storage: ResultStorage,
+    parallel: bool = True
+) -> AIEvaluationBatch:
+    """
+    Synchronous wrapper for batch_evaluate_prompt.
+
+    Args:
+        prompt_name: Name of prompt to evaluate
+        review_prompt: Review prompt template to use
+        evaluator_model: Model to use for evaluation
+        storage: Database storage
+        parallel: Run evaluations in parallel
+
+    Returns:
+        AIEvaluationBatch with results
+    """
+    return asyncio.run(
+        batch_evaluate_prompt(
+            prompt_name, review_prompt, evaluator_model, storage, parallel
+        )
+    )

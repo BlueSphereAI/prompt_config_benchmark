@@ -5,6 +5,7 @@ Handles OpenAI API calls, measures performance, and captures results.
 """
 
 import asyncio
+import logging
 import os
 import time
 import uuid
@@ -20,6 +21,9 @@ from .models import (
     LangfuseConfig,
     Prompt,
 )
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 
 # Pricing per 1M tokens (as of early 2024, update as needed)
@@ -158,6 +162,8 @@ class ExperimentExecutor:
         # Generate experiment ID
         experiment_id = str(uuid.uuid4())
 
+        logger.info(f"Starting experiment {experiment_id} for prompt '{prompt.name}' with config '{config_name}'")
+
         # Get messages from prompt
         messages = prompt.get_messages()
 
@@ -166,15 +172,19 @@ class ExperimentExecutor:
 
         # Prepare API call parameters
         api_params = self._prepare_api_params(config, messages)
+        logger.debug(f"API params for {experiment_id}: {api_params}")
 
         # Execute with timing
         start_time = datetime.utcnow()
         start_perf = time.perf_counter()
 
         try:
+            logger.info(f"Calling OpenAI API for experiment {experiment_id}...")
             completion = await self.async_client.chat.completions.create(**api_params)
             end_perf = time.perf_counter()
             end_time = datetime.utcnow()
+
+            logger.info(f"API call completed for experiment {experiment_id} in {end_perf - start_perf:.2f}s")
 
             # Extract response and metrics
             result = self._extract_result(
@@ -190,9 +200,13 @@ class ExperimentExecutor:
                 metadata=metadata or {}
             )
 
+            logger.info(f"Experiment {experiment_id} completed successfully")
+
         except Exception as e:
             end_perf = time.perf_counter()
             end_time = datetime.utcnow()
+
+            logger.error(f"Experiment {experiment_id} failed: {str(e)}", exc_info=True)
 
             result = ExperimentResult(
                 experiment_id=experiment_id,
@@ -404,7 +418,8 @@ class ExperimentExecutor:
         prompt: Prompt,
         configs: Dict[str, LangfuseConfig],
         prompt_variables: Optional[Dict] = None,
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
+        storage = None
     ) -> Dict[str, ExperimentResult]:
         """
         Run multiple experiments with different configs on the same prompt in parallel (async).
@@ -414,10 +429,13 @@ class ExperimentExecutor:
             configs: Dictionary mapping config names to LangfuseConfig instances
             prompt_variables: Variables for the prompt
             metadata: Additional metadata
+            storage: Optional ResultStorage instance to save results incrementally
 
         Returns:
             Dictionary mapping config names to results
         """
+        logger.info(f"Starting batch run for prompt '{prompt.name}' with {len(configs)} configs")
+
         # Create tasks for all experiments
         tasks = []
         config_names = []
@@ -432,11 +450,36 @@ class ExperimentExecutor:
             tasks.append(task)
             config_names.append(config_name)
 
-        # Run all tasks in parallel
-        results_list = await asyncio.gather(*tasks)
+        # Run all tasks in parallel and save results as they complete
+        if storage:
+            logger.info("Storage provided - will save results incrementally as they complete")
+            results = {}
+            completed = 0
 
-        # Map results back to config names
-        results = {name: result for name, result in zip(config_names, results_list)}
+            # Use asyncio.as_completed to process results as they finish
+            for coro in asyncio.as_completed(tasks):
+                result = await coro
+                completed += 1
+
+                # Find which config this result is for
+                config_name = result.config_name
+                results[config_name] = result
+
+                # Save to database immediately
+                try:
+                    logger.info(f"Saving result for experiment {result.experiment_id} ({completed}/{len(tasks)})")
+                    storage.save_result(result)
+                    logger.info(f"Successfully saved result for config '{config_name}'")
+                except Exception as e:
+                    logger.error(f"Failed to save result for config '{config_name}': {str(e)}", exc_info=True)
+
+            logger.info(f"Batch run completed: {completed}/{len(tasks)} experiments saved")
+        else:
+            logger.info("No storage provided - results will be returned but not saved")
+            # Run all tasks in parallel without saving
+            results_list = await asyncio.gather(*tasks)
+            # Map results back to config names
+            results = {name: result for name, result in zip(config_names, results_list)}
 
         return results
 

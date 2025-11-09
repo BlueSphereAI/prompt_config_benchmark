@@ -5,11 +5,14 @@ Supports loading from JSON/YAML files and validating against the schema.
 """
 
 import json
+import logging
 import yaml
 from pathlib import Path
 from typing import Dict, List, Union
 
 from .models import LangfuseConfig, Prompt
+
+logger = logging.getLogger(__name__)
 
 
 class ConfigLoader:
@@ -74,15 +77,29 @@ class ConfigLoader:
             Dictionary mapping config names to LangfuseConfig instances
         """
         directory = Path(directory)
+        logger.info(f"Loading configs from directory: {directory} with pattern: {pattern}")
+
         if not directory.exists():
+            logger.error(f"Directory not found: {directory}")
             raise FileNotFoundError(f"Directory not found: {directory}")
 
         configs = {}
-        for file_path in directory.glob(pattern):
+        config_files = list(directory.glob(pattern))
+        logger.info(f"Found {len(config_files)} config files matching pattern '{pattern}'")
+
+        for file_path in config_files:
             # Use filename (without extension) as config name
             config_name = file_path.stem
-            configs[config_name] = ConfigLoader.load_config_from_file(file_path)
+            try:
+                logger.debug(f"Loading config from file: {file_path}")
+                config = ConfigLoader.load_config_from_file(file_path)
+                configs[config_name] = config
+                logger.info(f"Successfully loaded config '{config_name}' from {file_path}")
+            except Exception as e:
+                logger.error(f"Failed to load config from {file_path}: {str(e)}", exc_info=True)
+                raise
 
+        logger.info(f"Loaded {len(configs)} configs total: {list(configs.keys())}")
         return configs
 
     @staticmethod

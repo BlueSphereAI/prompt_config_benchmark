@@ -373,6 +373,52 @@ def analyze(db, prompt, export):
 
 
 @main.command()
+@click.option(
+    "--host",
+    default="0.0.0.0",
+    help="Host to bind the server to (default: 0.0.0.0)"
+)
+@click.option(
+    "--port",
+    default=8000,
+    type=int,
+    help="Port to bind the server to (default: 8000)"
+)
+@click.option(
+    "--reload",
+    is_flag=True,
+    help="Enable auto-reload on code changes (development mode)"
+)
+def serve(host, port, reload):
+    """
+    Start the FastAPI web server.
+
+    Launches a web server to view benchmark results via a React UI.
+    """
+    console.print(f"[bold cyan]Starting Benchmark Web Server[/bold cyan]\n")
+    console.print(f"Server will be available at: http://{host}:{port}")
+    console.print(f"API documentation at: http://{host}:{port}/docs\n")
+
+    if reload:
+        console.print("[yellow]Running in development mode with auto-reload[/yellow]\n")
+
+    try:
+        import uvicorn
+        from prompt_benchmark.api.server import app
+
+        uvicorn.run(
+            "prompt_benchmark.api.server:app",
+            host=host,
+            port=port,
+            reload=reload
+        )
+    except ImportError:
+        console.print("[red]Error: FastAPI dependencies not installed[/red]")
+        console.print("Please run: pip install -e .")
+        sys.exit(1)
+
+
+@main.command()
 def init():
     """
     Initialize the benchmark environment.

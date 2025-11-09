@@ -1,6 +1,6 @@
 {
   "model": "gpt-5",
-  "max_output_tokens": 2500,
+  "max_output_tokens": 6000,
   "verbosity": "low",
   "reasoning_effort": "minimal"
 }

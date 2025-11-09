@@ -267,3 +267,167 @@ class ConfigComparison(BaseModel):
     total_evaluations: int = Field(default=0, ge=0)
 
     generated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ============================================================================
+# AI-Assisted Ranking System Models
+# ============================================================================
+
+
+class ReviewPrompt(BaseModel):
+    """Template for AI evaluation prompts."""
+    prompt_id: str = Field(..., description="UUID")
+    name: str = Field(..., description="e.g., 'Code Quality Reviewer'")
+    description: Optional[str] = None
+
+    # The actual prompt template
+    template: str = Field(..., description="Uses {original_prompt}, {config_name}, {result}")
+    system_prompt: Optional[str] = None
+
+    # Evaluation criteria
+    criteria: List[str] = Field(..., description="e.g., ['accuracy', 'clarity', 'completeness']")
+
+    # Default evaluator model
+    default_model: str = Field(..., description="e.g., 'gpt-4-turbo', 'claude-3-opus'")
+
+    # Metadata
+    created_by: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    is_active: bool = True
+
+
+class AIEvaluation(BaseModel):
+    """Result of AI evaluating a single experiment."""
+    evaluation_id: str = Field(..., description="UUID")
+    experiment_id: str = Field(..., description="Links to experiment")
+    review_prompt_id: str = Field(..., description="Which template was used")
+    batch_id: str = Field(..., description="Groups evaluations from same batch")
+
+    # Evaluator info
+    model_evaluator: str = Field(..., description="e.g., 'gpt-4-turbo', 'claude-3-opus'")
+
+    # Scores
+    criteria_scores: Dict[str, float] = Field(..., description="e.g., {'accuracy': 8.5, 'clarity': 9.0}")
+    overall_score: float = Field(..., ge=0, le=10, description="0-10")
+
+    # Ranking within this batch
+    ai_rank: int = Field(..., ge=1, description="1 = best, 2 = second, etc.")
+
+    # Explanations
+    justification: str = Field(..., description="2-3 sentence explanation")
+    strengths: List[str] = Field(default_factory=list, description="Key strengths identified")
+    weaknesses: List[str] = Field(default_factory=list, description="Key weaknesses identified")
+
+    # Metadata
+    evaluated_at: datetime = Field(default_factory=datetime.utcnow)
+    evaluation_duration: float = Field(..., ge=0, description="Seconds taken")
+
+
+class AIEvaluationBatch(BaseModel):
+    """Tracks a batch AI evaluation of all configs for a prompt."""
+    batch_id: str = Field(..., description="UUID")
+    prompt_name: str
+    review_prompt_id: str
+    model_evaluator: str
+
+    # Status
+    status: str = Field(..., description="pending, running, completed, failed")
+    num_experiments: int
+    num_completed: int = 0
+
+    # Results
+    evaluation_ids: List[str] = Field(default_factory=list, description="All evaluations in this batch")
+    ranked_experiment_ids: List[str] = Field(default_factory=list, description="Ordered by AI ranking")
+
+    # Timing
+    started_at: datetime = Field(default_factory=datetime.utcnow)
+    completed_at: Optional[datetime] = None
+    total_duration: Optional[float] = None
+
+    # Cost
+    estimated_cost: float = 0.0
+
+
+class HumanRanking(BaseModel):
+    """Human's ranking of configs for a prompt."""
+    ranking_id: str = Field(..., description="UUID")
+    prompt_name: str
+    evaluator_name: str = Field(..., description="Who did the ranking")
+
+    # The ranking (ordered list, best to worst)
+    ranked_experiment_ids: List[str]
+
+    # Context
+    based_on_ai_batch_id: Optional[str] = Field(None, description="If started from AI ranking")
+
+    # Track changes from AI
+    changes_from_ai: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="e.g., [{'experiment_id': 'x', 'from_rank': 2, 'to_rank': 1}]"
+    )
+
+    # Agreement metrics
+    ai_agreement_score: Optional[float] = Field(None, ge=-1, le=1, description="Kendall Tau: -1 to 1")
+    top_3_overlap: Optional[int] = Field(None, ge=0, le=3, description="How many of top 3 match")
+    exact_position_matches: Optional[int] = Field(None, ge=0, description="How many same position")
+
+    # User notes
+    notes: Optional[str] = None
+
+    # Metadata
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    time_spent_seconds: float = Field(..., ge=0, description="How long they spent ranking")
+
+
+class RankingWeights(BaseModel):
+    """Configurable weights for recommendation algorithm."""
+    prompt_name: str = Field(..., description="Weights can be per-prompt or global ('_default')")
+    quality_weight: float = Field(0.60, ge=0, le=1)
+    speed_weight: float = Field(0.30, ge=0, le=1)
+    cost_weight: float = Field(0.10, ge=0, le=1)
+
+    # Metadata
+    updated_by: str
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    @field_validator('cost_weight')
+    @classmethod
+    def validate_weights_sum(cls, v, info):
+        """Validate that weights sum to 1.0."""
+        quality = info.data.get('quality_weight', 0)
+        speed = info.data.get('speed_weight', 0)
+        total = quality + speed + v
+        if abs(total - 1.0) > 0.001:  # Allow small floating point error
+            raise ValueError(f"Weights must sum to 1.0, got {total}")
+        return v
+
+
+class Recommendation(BaseModel):
+    """Best config recommendation for a prompt."""
+    prompt_name: str
+    recommended_config: str = Field(..., description="Config name")
+
+    # Scoring
+    final_score: float = Field(..., ge=0, le=10, description="Weighted score")
+    quality_score: float = Field(..., ge=0, le=10)
+    speed_score: float = Field(..., ge=0, le=10)
+    cost_score: float = Field(..., ge=0, le=10)
+
+    # Confidence
+    confidence: str = Field(..., description="HIGH, MEDIUM, or LOW")
+    confidence_factors: List[str] = Field(default_factory=list, description="Reasons for confidence level")
+
+    # Evidence
+    num_ai_evaluations: int = Field(default=0, ge=0)
+    num_human_rankings: int = Field(default=0, ge=0)
+    consensus_agreement: Optional[float] = Field(None, description="If multiple humans")
+
+    # Reasoning
+    reasoning: str = Field(..., description="Human-readable explanation")
+
+    # Alternatives
+    runner_up_config: Optional[str] = None
+    score_difference: Optional[float] = Field(None, ge=0, description="How close was runner-up")
+
+    generated_at: datetime = Field(default_factory=datetime.utcnow)
