@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { FileText } from 'lucide-react';
+import { FileText, Settings } from 'lucide-react';
 import Compare from './pages/Compare';
 import { Prompts } from './pages/Prompts';
+import { Configs } from './pages/Configs';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -19,6 +20,7 @@ function Navigation() {
 
   const navItems = [
     { path: '/', label: 'Prompt Library', icon: FileText },
+    { path: '/configs', label: 'Configs', icon: Settings },
   ];
 
   return (
@@ -66,9 +68,10 @@ function AppRoutes() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <Navigation />
-      <main className={isComparePage ? "py-6" : "max-w-7xl mx-auto py-6 sm:px-6 lg:px-8"}>
+      <main className="py-6">
         <Routes>
           <Route path="/" element={<Prompts />} />
+          <Route path="/configs" element={<Configs />} />
           <Route path="/compare/:promptName" element={<Compare />} />
         </Routes>
       </main>

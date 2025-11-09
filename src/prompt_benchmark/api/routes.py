@@ -24,6 +24,9 @@ from prompt_benchmark.api.schemas import (
     ConfigComparison,
     OverallRankings,
     DashboardStats,
+    LLMConfigResponse,
+    LLMConfigCreate,
+    LLMConfigUpdate,
 )
 
 logger = logging.getLogger(__name__)
@@ -719,7 +722,7 @@ def get_prompts_metadata(
             metadata["last_run_date"] = latest_exp.start_time.isoformat()
 
             # Calculate total cost of last run
-            metadata["total_cost"] = sum(e.estimated_cost_usd for e in experiments)
+            metadata["total_cost"] = sum(e.estimated_cost_usd or 0 for e in experiments)
 
             # Check for AI evaluation
             from prompt_benchmark.storage import DBAIEvaluationBatch
@@ -847,6 +850,324 @@ def delete_prompt(
     return {"status": "deleted", "prompt_name": prompt_name}
 
 
+@router.delete("/experiments/delete-by-prompt/{prompt_name}")
+def delete_experiments_by_prompt(
+    prompt_name: str,
+    storage: ResultStorage = Depends(get_storage),
+):
+    """Delete all experiment results and related data for a specific prompt."""
+    from prompt_benchmark.storage import DBAIEvaluation, DBAIEvaluationBatch, DBHumanRanking
+
+    logger.info(f"Deleting all experiments and related data for prompt: {prompt_name}")
+
+    with SQLSession(storage.engine) as session:
+        # Get experiment IDs for this prompt
+        experiment_ids = [
+            exp.experiment_id
+            for exp in session.query(DBExperimentResult.experiment_id).filter(
+                DBExperimentResult.prompt_name == prompt_name
+            ).all()
+        ]
+
+        if not experiment_ids:
+            logger.warning(f"No experiments found for prompt: {prompt_name}")
+            return {
+                "status": "no_experiments",
+                "prompt_name": prompt_name,
+                "deleted_experiments": 0,
+                "deleted_evaluations": 0,
+                "deleted_ai_evaluations": 0,
+                "deleted_ai_batches": 0,
+                "deleted_human_rankings": 0
+            }
+
+        logger.info(f"Found {len(experiment_ids)} experiments to delete")
+
+        # Delete AI evaluations for these experiments
+        ai_eval_count = session.query(DBAIEvaluation).filter(
+            DBAIEvaluation.experiment_id.in_(experiment_ids)
+        ).delete(synchronize_session=False)
+        logger.info(f"Deleted {ai_eval_count} AI evaluations")
+
+        # Delete AI evaluation batches for this prompt
+        ai_batch_count = session.query(DBAIEvaluationBatch).filter(
+            DBAIEvaluationBatch.prompt_name == prompt_name
+        ).delete(synchronize_session=False)
+        logger.info(f"Deleted {ai_batch_count} AI evaluation batches")
+
+        # Delete human rankings for this prompt
+        human_ranking_count = session.query(DBHumanRanking).filter(
+            DBHumanRanking.prompt_name == prompt_name
+        ).delete(synchronize_session=False)
+        logger.info(f"Deleted {human_ranking_count} human rankings")
+
+        # Delete human evaluations
+        eval_count = session.query(DBEvaluation).filter(
+            DBEvaluation.experiment_id.in_(experiment_ids)
+        ).delete(synchronize_session=False)
+        logger.info(f"Deleted {eval_count} human evaluations")
+
+        # Delete experiments
+        exp_count = session.query(DBExperimentResult).filter(
+            DBExperimentResult.prompt_name == prompt_name
+        ).delete(synchronize_session=False)
+        logger.info(f"Deleted {exp_count} experiments")
+
+        session.commit()
+        logger.info(f"Successfully deleted all data for prompt: {prompt_name}")
+
+    return {
+        "status": "deleted",
+        "prompt_name": prompt_name,
+        "deleted_experiments": exp_count,
+        "deleted_evaluations": eval_count,
+        "deleted_ai_evaluations": ai_eval_count,
+        "deleted_ai_batches": ai_batch_count,
+        "deleted_human_rankings": human_ranking_count
+    }
+
+
+# ============================================================================
+# LLM Config Management Routes
+# ============================================================================
+
+
+@router.get("/configs/list", response_model=List[LLMConfigResponse])
+def list_configs(
+    active_only: bool = Query(True),
+    storage: ResultStorage = Depends(get_storage),
+):
+    """List all LLM configurations."""
+    from prompt_benchmark.storage import DBLLMConfig
+    from sqlalchemy.orm import Session as SQLSession
+
+    logger.info(f"Listing configs (active_only={active_only})")
+
+    with SQLSession(storage.engine) as session:
+        from sqlalchemy import select
+        stmt = select(DBLLMConfig)
+        if active_only:
+            stmt = stmt.where(DBLLMConfig.is_active == True)
+        stmt = stmt.order_by(DBLLMConfig.created_at.desc())
+        db_configs = session.execute(stmt).scalars().all()
+
+        return [
+            LLMConfigResponse(
+                name=c.name,
+                model=c.model,
+                max_output_tokens=c.max_output_tokens,
+                verbosity=c.verbosity,
+                reasoning_effort=c.reasoning_effort,
+                description=c.description,
+                created_at=c.created_at,
+                updated_at=c.updated_at,
+                is_active=c.is_active
+            )
+            for c in db_configs
+        ]
+
+
+@router.get("/configs/get/{name}", response_model=LLMConfigResponse)
+def get_config(
+    name: str,
+    storage: ResultStorage = Depends(get_storage),
+):
+    """Get a specific LLM configuration by name."""
+    from prompt_benchmark.storage import DBLLMConfig
+    from sqlalchemy.orm import Session as SQLSession
+    from sqlalchemy import select
+
+    logger.info(f"Getting config: {name}")
+
+    with SQLSession(storage.engine) as session:
+        stmt = select(DBLLMConfig).where(DBLLMConfig.name == name)
+        db_config = session.execute(stmt).scalar_one_or_none()
+
+        if not db_config:
+            raise HTTPException(status_code=404, detail=f"Config not found: {name}")
+
+        return LLMConfigResponse(
+            name=db_config.name,
+            model=db_config.model,
+            max_output_tokens=db_config.max_output_tokens,
+            verbosity=db_config.verbosity,
+            reasoning_effort=db_config.reasoning_effort,
+            description=db_config.description,
+            created_at=db_config.created_at,
+            updated_at=db_config.updated_at,
+            is_active=db_config.is_active
+        )
+
+
+@router.post("/configs/create", response_model=LLMConfigResponse)
+def create_config(
+    config_data: LLMConfigCreate,
+    storage: ResultStorage = Depends(get_storage),
+):
+    """Create a new LLM configuration."""
+    from prompt_benchmark.models import LangfuseConfig
+    from prompt_benchmark.storage import DBLLMConfig
+    from sqlalchemy.orm import Session as SQLSession
+    from sqlalchemy import select
+
+    logger.info(f"Creating config: {config_data.name}")
+
+    # Check if config already exists
+    with SQLSession(storage.engine) as session:
+        stmt = select(DBLLMConfig).where(DBLLMConfig.name == config_data.name)
+        existing = session.execute(stmt).scalar_one_or_none()
+        if existing:
+            raise HTTPException(status_code=400, detail=f"Config already exists: {config_data.name}")
+
+    # Create LangfuseConfig to validate
+    langfuse_config = LangfuseConfig(
+        model=config_data.model,
+        max_output_tokens=config_data.max_output_tokens,
+        verbosity=config_data.verbosity,
+        reasoning_effort=config_data.reasoning_effort,
+    )
+
+    # Save to database
+    storage.save_config(langfuse_config, config_data.name, config_data.description)
+
+    # Return the created config
+    with SQLSession(storage.engine) as session:
+        stmt = select(DBLLMConfig).where(DBLLMConfig.name == config_data.name)
+        db_config = session.execute(stmt).scalar_one()
+
+        return LLMConfigResponse(
+            name=db_config.name,
+            model=db_config.model,
+            max_output_tokens=db_config.max_output_tokens,
+            verbosity=db_config.verbosity,
+            reasoning_effort=db_config.reasoning_effort,
+            description=db_config.description,
+            created_at=db_config.created_at,
+            updated_at=db_config.updated_at,
+            is_active=db_config.is_active
+        )
+
+
+@router.put("/configs/update/{name}", response_model=LLMConfigResponse)
+def update_config(
+    name: str,
+    config_data: LLMConfigUpdate,
+    storage: ResultStorage = Depends(get_storage),
+):
+    """Update an existing LLM configuration."""
+    from prompt_benchmark.models import LangfuseConfig
+    from prompt_benchmark.storage import DBLLMConfig
+    from sqlalchemy.orm import Session as SQLSession
+    from sqlalchemy import select
+
+    logger.info(f"Updating config: {name}")
+
+    # Get existing config
+    with SQLSession(storage.engine) as session:
+        stmt = select(DBLLMConfig).where(DBLLMConfig.name == name)
+        db_config = session.execute(stmt).scalar_one_or_none()
+
+        if not db_config:
+            raise HTTPException(status_code=404, detail=f"Config not found: {name}")
+
+        # Update fields if provided
+        if config_data.model is not None:
+            db_config.model = config_data.model
+        if config_data.max_output_tokens is not None:
+            db_config.max_output_tokens = config_data.max_output_tokens
+        if config_data.verbosity is not None:
+            db_config.verbosity = config_data.verbosity
+        if config_data.reasoning_effort is not None:
+            db_config.reasoning_effort = config_data.reasoning_effort
+        if config_data.description is not None:
+            db_config.description = config_data.description
+
+        db_config.updated_at = datetime.utcnow()
+        session.commit()
+        session.refresh(db_config)
+
+        return LLMConfigResponse(
+            name=db_config.name,
+            model=db_config.model,
+            max_output_tokens=db_config.max_output_tokens,
+            verbosity=db_config.verbosity,
+            reasoning_effort=db_config.reasoning_effort,
+            description=db_config.description,
+            created_at=db_config.created_at,
+            updated_at=db_config.updated_at,
+            is_active=db_config.is_active
+        )
+
+
+@router.delete("/configs/delete/{name}")
+def delete_config(
+    name: str,
+    storage: ResultStorage = Depends(get_storage),
+):
+    """Delete an LLM configuration (soft delete)."""
+    logger.info(f"Deleting config: {name}")
+
+    success = storage.delete_config(name)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Config not found: {name}")
+
+    return {"status": "deleted", "config_name": name}
+
+
+@router.post("/configs/clone/{name}", response_model=LLMConfigResponse)
+def clone_config(
+    name: str,
+    new_name: str = Query(...),
+    storage: ResultStorage = Depends(get_storage),
+):
+    """Clone an existing LLM configuration with a new name."""
+    from prompt_benchmark.storage import DBLLMConfig
+    from sqlalchemy.orm import Session as SQLSession
+    from sqlalchemy import select
+
+    logger.info(f"Cloning config {name} to {new_name}")
+
+    with SQLSession(storage.engine) as session:
+        # Get source config
+        stmt = select(DBLLMConfig).where(DBLLMConfig.name == name)
+        source_config = session.execute(stmt).scalar_one_or_none()
+
+        if not source_config:
+            raise HTTPException(status_code=404, detail=f"Source config not found: {name}")
+
+        # Check if new name already exists
+        stmt = select(DBLLMConfig).where(DBLLMConfig.name == new_name)
+        existing = session.execute(stmt).scalar_one_or_none()
+        if existing:
+            raise HTTPException(status_code=400, detail=f"Config already exists: {new_name}")
+
+        # Create new config
+        new_config = DBLLMConfig(
+            name=new_name,
+            model=source_config.model,
+            max_output_tokens=source_config.max_output_tokens,
+            verbosity=source_config.verbosity,
+            reasoning_effort=source_config.reasoning_effort,
+            description=f"Cloned from {name}" + (f": {source_config.description}" if source_config.description else ""),
+            is_active=True
+        )
+        session.add(new_config)
+        session.commit()
+        session.refresh(new_config)
+
+        return LLMConfigResponse(
+            name=new_config.name,
+            model=new_config.model,
+            max_output_tokens=new_config.max_output_tokens,
+            verbosity=new_config.verbosity,
+            reasoning_effort=new_config.reasoning_effort,
+            description=new_config.description,
+            created_at=new_config.created_at,
+            updated_at=new_config.updated_at,
+            is_active=new_config.is_active
+        )
+
+
 # ============================================================================
 # Run Experiments Routes
 # ============================================================================
@@ -869,26 +1190,19 @@ async def run_all_configs_for_prompt(
 
     logger.info(f"Found prompt: {prompt_name}")
 
-    # Load all configs from configs directory
+    # Load all configs from database
     try:
-        from pathlib import Path
-        configs_dir = Path("data/configs")
-        logger.info(f"Loading configs from directory: {configs_dir}")
-
-        if not configs_dir.exists():
-            logger.error(f"Configs directory not found: {configs_dir}")
-            raise HTTPException(status_code=404, detail="Configs directory not found")
-
-        configs = ConfigLoader.load_configs_from_directory(configs_dir)
-        logger.info(f"Loaded {len(configs)} configs: {list(configs.keys())}")
+        logger.info(f"Loading configs from database")
+        configs = storage.get_all_configs_dict(active_only=True)
+        logger.info(f"Loaded {len(configs)} configs from database: {list(configs.keys())}")
 
     except Exception as e:
-        logger.error(f"Failed to load configs: {str(e)}", exc_info=True)
+        logger.error(f"Failed to load configs from database: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to load configs: {str(e)}")
 
     if not configs:
-        logger.error("No configs found in directory")
-        raise HTTPException(status_code=404, detail="No configs found")
+        logger.error("No active configs found in database")
+        raise HTTPException(status_code=404, detail="No active configs found")
 
     # Add to running experiments
     running_experiments.add(prompt_name)

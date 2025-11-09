@@ -114,3 +114,35 @@ class DashboardStats(BaseModel):
     avg_duration: float
     success_rate: float
     recent_experiments: List[ExperimentResponse]
+
+
+class LLMConfigResponse(BaseModel):
+    """Response model for LLM configurations."""
+    name: str
+    model: str
+    max_output_tokens: Optional[int] = None
+    verbosity: Optional[str] = None
+    reasoning_effort: Optional[str] = None
+    description: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    is_active: bool
+
+
+class LLMConfigCreate(BaseModel):
+    """Request model for creating LLM configurations."""
+    name: str
+    model: str
+    max_output_tokens: Optional[int] = None
+    verbosity: Optional[str] = None
+    reasoning_effort: Optional[str] = None
+    description: Optional[str] = None
+
+
+class LLMConfigUpdate(BaseModel):
+    """Request model for updating LLM configurations."""
+    model: Optional[str] = None
+    max_output_tokens: Optional[int] = None
+    verbosity: Optional[str] = None
+    reasoning_effort: Optional[str] = None
+    description: Optional[str] = None

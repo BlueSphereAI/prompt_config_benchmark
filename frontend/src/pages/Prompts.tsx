@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, Play, FileText, X, Save, Eye, BarChart, Loader } from 'lucide-react';
+import { Plus, Edit2, Trash2, Play, FileText, X, Save, Eye, BarChart, Loader, XCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 
@@ -26,6 +26,7 @@ export function Prompts() {
   const [loading, setLoading] = useState(true);
   const [showEditor, setShowEditor] = useState(false);
   const [editingPrompt, setEditingPrompt] = useState<Prompt | null>(null);
+  const [editingPromptMetadata, setEditingPromptMetadata] = useState<PromptMetadata | null>(null);
   const [viewMode, setViewMode] = useState<'preview' | 'edit'>('preview');
 
   useEffect(() => {
@@ -85,11 +86,31 @@ export function Prompts() {
     }
   };
 
+  const handleDeleteResults = async (promptName: string) => {
+    const prompt = promptsMetadata.find(p => p.name === promptName);
+    if (!prompt || prompt.num_configs === 0) return;
+
+    if (!confirm(`Delete all ${prompt.num_configs} experiment results for "${promptName}"?\n\nThis will also delete AI evaluations and rankings.`)) {
+      return;
+    }
+
+    try {
+      await api.deleteExperimentsByPrompt(promptName);
+      await fetchPrompts();
+      alert('Experiment results deleted successfully');
+    } catch (error) {
+      console.error('Failed to delete results:', error);
+      alert('Failed to delete experiment results');
+    }
+  };
+
   const handleEdit = async (promptName: string) => {
     try {
       const response = await fetch(`http://localhost:8000/api/prompts/detail/${encodeURIComponent(promptName)}`);
       const prompt = await response.json();
+      const metadata = promptsMetadata.find(p => p.name === promptName);
       setEditingPrompt(prompt);
+      setEditingPromptMetadata(metadata || null);
       setViewMode('edit');
       setShowEditor(true);
     } catch (error) {
@@ -147,7 +168,7 @@ export function Prompts() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto p-6">
+    <div className="px-4 sm:px-6 lg:px-8">
       {/* Header */}
       <div className="flex justify-between items-center mb-6">
         <div>
@@ -177,7 +198,7 @@ export function Prompts() {
           </button>
         </div>
       ) : (
-        <div className="bg-white rounded-lg shadow overflow-hidden">
+        <div className="bg-white rounded-lg shadow overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
@@ -210,42 +231,42 @@ export function Prompts() {
                 const isRunning = prompt.is_running;
                 return (
                   <tr key={prompt.name} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
-                        <div className="text-sm font-medium text-gray-900">{prompt.name}</div>
+                        <div className="text-sm font-medium text-gray-900 break-words">{prompt.name}</div>
                         {isRunning && (
-                          <Loader className="h-4 w-4 text-blue-600 animate-spin" />
+                          <Loader className="h-4 w-4 text-blue-600 animate-spin flex-shrink-0" />
                         )}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-6 py-4">
                       {isRunning ? (
-                        <span className="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-700">
+                        <span className="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-700 whitespace-nowrap">
                           Running...
                         </span>
                       ) : (
-                        <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${statusBadge.className}`}>
+                        <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full whitespace-nowrap ${statusBadge.className}`}>
                           {statusBadge.label}
                         </span>
                       )}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
+                    <td className="px-6 py-4">
+                      <div className="text-sm text-gray-900 break-words">
                         {prompt.recommended_config || '—'}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-6 py-4">
                       <div className="text-sm text-gray-900">
                         {prompt.num_configs > 0 ? prompt.num_configs : '—'}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-500">
+                    <td className="px-6 py-4">
+                      <div className="text-sm text-gray-500 whitespace-nowrap">
                         {formatDate(prompt.last_run_date)}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
+                    <td className="px-6 py-4">
+                      <div className="text-sm text-gray-900 whitespace-nowrap">
                         {formatCost(prompt.total_cost)}
                       </div>
                     </td>
@@ -279,6 +300,15 @@ export function Prompts() {
                         >
                           <Play size={18} />
                         </button>
+                        {prompt.status !== 'not_run' && (
+                          <button
+                            onClick={() => handleDeleteResults(prompt.name)}
+                            className="p-2 text-orange-600 hover:bg-orange-50 rounded"
+                            title="Delete Results"
+                          >
+                            <XCircle size={18} />
+                          </button>
+                        )}
                         <button
                           onClick={() => handleEdit(prompt.name)}
                           className="p-2 text-blue-600 hover:bg-blue-50 rounded"
@@ -307,16 +337,23 @@ export function Prompts() {
       {showEditor && (
         <PromptEditorModal
           prompt={editingPrompt}
+          promptMetadata={editingPromptMetadata}
           mode={viewMode}
           onClose={() => {
             setShowEditor(false);
             setEditingPrompt(null);
+            setEditingPromptMetadata(null);
           }}
-          onSave={async () => {
+          onSave={async (shouldRerun: boolean) => {
             await fetchPrompts();
             setShowEditor(false);
             setEditingPrompt(null);
+            setEditingPromptMetadata(null);
+            if (shouldRerun && editingPrompt) {
+              handleRunAllConfigs(editingPrompt.name);
+            }
           }}
+          onDeleteResults={handleDeleteResults}
         />
       )}
     </div>
@@ -326,14 +363,18 @@ export function Prompts() {
 // Full-screen JSON editor modal
 function PromptEditorModal({
   prompt,
+  promptMetadata,
   mode: initialMode,
   onClose,
   onSave,
+  onDeleteResults,
 }: {
   prompt: Prompt | null;
+  promptMetadata: PromptMetadata | null;
   mode: 'preview' | 'edit';
   onClose: () => void;
-  onSave: () => void;
+  onSave: (shouldRerun: boolean) => void;
+  onDeleteResults: (promptName: string) => void;
 }) {
   const [mode, setMode] = useState<'preview' | 'edit'>(initialMode);
   const [jsonText, setJsonText] = useState(() => {
@@ -358,6 +399,7 @@ function PromptEditorModal({
   const [name, setName] = useState(prompt?.name || '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showRerunDialog, setShowRerunDialog] = useState(false);
 
   const validateJSON = () => {
     try {
@@ -383,6 +425,16 @@ function PromptEditorModal({
     const messages = validateJSON();
     if (!messages) return;
 
+    // Check if this is an edit with existing results
+    if (prompt && promptMetadata && promptMetadata.status !== 'not_run') {
+      setShowRerunDialog(true);
+      return;
+    }
+
+    await performSave(false);
+  };
+
+  const performSave = async (shouldRerun: boolean) => {
     setSaving(true);
     setError(null);
 
@@ -396,6 +448,9 @@ function PromptEditorModal({
       const params = new URLSearchParams();
       params.append('name', name);
 
+      const messages = validateJSON();
+      if (!messages) return;
+
       const response = await fetch(`${url}?${params.toString()}`, {
         method,
         headers: { 'Content-Type': 'application/json' },
@@ -407,7 +462,7 @@ function PromptEditorModal({
         throw new Error(errorData.detail || 'Failed to save prompt');
       }
 
-      onSave();
+      onSave(shouldRerun);
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Failed to save prompt');
     } finally {
@@ -548,6 +603,65 @@ function PromptEditorModal({
           </div>
         )}
       </div>
+
+      {/* Rerun Dialog */}
+      {showRerunDialog && promptMetadata && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60]">
+          <div className="bg-white rounded-lg shadow-2xl max-w-md w-full p-6">
+            <h3 className="text-lg font-bold mb-4">Existing Results Found</h3>
+            <p className="text-sm text-gray-700 mb-4">
+              This prompt has {promptMetadata.num_configs} existing experiment results.
+            </p>
+            <p className="text-sm text-gray-700 mb-6">
+              What would you like to do?
+            </p>
+            <div className="space-y-3">
+              <button
+                onClick={async () => {
+                  setShowRerunDialog(false);
+                  await performSave(false);
+                }}
+                className="w-full px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-left"
+              >
+                <div className="font-medium">Keep existing results</div>
+                <div className="text-xs text-gray-600">Save changes without deleting or rerunning</div>
+              </button>
+              <button
+                onClick={async () => {
+                  setShowRerunDialog(false);
+                  if (prompt) {
+                    await onDeleteResults(prompt.name);
+                  }
+                  await performSave(false);
+                }}
+                className="w-full px-4 py-2 bg-orange-100 hover:bg-orange-200 text-orange-900 rounded-lg text-left"
+              >
+                <div className="font-medium">Delete existing results</div>
+                <div className="text-xs text-orange-700">Remove all results, save changes, don't rerun</div>
+              </button>
+              <button
+                onClick={async () => {
+                  setShowRerunDialog(false);
+                  if (prompt) {
+                    await onDeleteResults(prompt.name);
+                  }
+                  await performSave(true);
+                }}
+                className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-left"
+              >
+                <div className="font-medium">Delete & rerun all configs</div>
+                <div className="text-xs text-green-100">Remove results, save changes, and start new run</div>
+              </button>
+              <button
+                onClick={() => setShowRerunDialog(false)}
+                className="w-full px-4 py-2 border border-gray-300 hover:bg-gray-50 rounded-lg"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -166,4 +166,58 @@ export const api = {
   async getPromptsMetadata(activeOnly = true): Promise<any> {
     return fetchAPI(`/prompts/metadata?active_only=${activeOnly}`);
   },
+
+  async deleteExperimentsByPrompt(promptName: string): Promise<any> {
+    return fetchAPI(`/experiments/delete-by-prompt/${encodeURIComponent(promptName)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  // LLM Config Management
+  async listConfigs(activeOnly = true): Promise<any[]> {
+    return fetchAPI(`/configs/list?active_only=${activeOnly}`);
+  },
+
+  async getConfig(name: string): Promise<any> {
+    return fetchAPI(`/configs/get/${encodeURIComponent(name)}`);
+  },
+
+  async createConfig(config: {
+    name: string;
+    model: string;
+    max_output_tokens?: number;
+    verbosity?: string;
+    reasoning_effort?: string;
+    description?: string;
+  }): Promise<any> {
+    return fetchAPI('/configs/create', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+  },
+
+  async updateConfig(name: string, config: {
+    model?: string;
+    max_output_tokens?: number;
+    verbosity?: string;
+    reasoning_effort?: string;
+    description?: string;
+  }): Promise<any> {
+    return fetchAPI(`/configs/update/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    });
+  },
+
+  async deleteConfig(name: string): Promise<any> {
+    return fetchAPI(`/configs/delete/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  async cloneConfig(name: string, newName: string): Promise<any> {
+    return fetchAPI(`/configs/clone/${encodeURIComponent(name)}?new_name=${encodeURIComponent(newName)}`, {
+      method: 'POST',
+    });
+  },
 };

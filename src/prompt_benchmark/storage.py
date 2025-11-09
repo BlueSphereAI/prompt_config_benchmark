@@ -215,6 +215,23 @@ class DBPrompt(Base):
     is_active = Column(Boolean, nullable=False, default=True)
 
 
+class DBLLMConfig(Base):
+    """Database model for LLM configurations."""
+
+    __tablename__ = "llm_configs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, unique=True, nullable=False, index=True)
+    model = Column(String, nullable=False)
+    max_output_tokens = Column(Integer, nullable=True)
+    verbosity = Column(String, nullable=True)  # "low", "medium", "high"
+    reasoning_effort = Column(String, nullable=True)  # "minimal", "medium", "high"
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    is_active = Column(Boolean, nullable=False, default=True)
+
+
 class ResultStorage:
     """
     Storage manager for experiment results and evaluations.
@@ -849,3 +866,144 @@ class ResultStorage:
             db_prompt.updated_at = datetime.utcnow()
             session.commit()
             return True
+
+    # LLM Config Management
+    def get_all_configs_dict(self, active_only: bool = True) -> Dict[str, LangfuseConfig]:
+        """
+        Get all LLM configurations as a dict mapping name to LangfuseConfig.
+
+        Args:
+            active_only: If True, only return active configs
+
+        Returns:
+            Dict mapping config name to LangfuseConfig object
+        """
+        with Session(self.engine) as session:
+            stmt = select(DBLLMConfig)
+            if active_only:
+                stmt = stmt.where(DBLLMConfig.is_active == True)
+            stmt = stmt.order_by(DBLLMConfig.created_at.desc())
+            db_configs = session.execute(stmt).scalars().all()
+
+            return {
+                db_config.name: self._db_config_to_langfuse(db_config)
+                for db_config in db_configs
+            }
+
+    def get_all_configs(self, active_only: bool = True) -> List[LangfuseConfig]:
+        """
+        Get all LLM configurations from database.
+
+        Args:
+            active_only: If True, only return active configs
+
+        Returns:
+            List of LangfuseConfig objects
+        """
+        with Session(self.engine) as session:
+            stmt = select(DBLLMConfig)
+            if active_only:
+                stmt = stmt.where(DBLLMConfig.is_active == True)
+            stmt = stmt.order_by(DBLLMConfig.created_at.desc())
+            db_configs = session.execute(stmt).scalars().all()
+            return [self._db_config_to_langfuse(c) for c in db_configs]
+
+    def get_config(self, name: str) -> Optional[LangfuseConfig]:
+        """
+        Get a single LLM configuration by name.
+
+        Args:
+            name: The config name
+
+        Returns:
+            LangfuseConfig or None if not found
+        """
+        with Session(self.engine) as session:
+            stmt = select(DBLLMConfig).where(DBLLMConfig.name == name)
+            db_config = session.execute(stmt).scalar_one_or_none()
+            if not db_config:
+                return None
+            return self._db_config_to_langfuse(db_config)
+
+    def save_config(self, config: LangfuseConfig, name: str, description: Optional[str] = None) -> int:
+        """
+        Save or update an LLM configuration.
+
+        Args:
+            config: The LangfuseConfig to save
+            name: The config name (unique identifier)
+            description: Optional description of the config
+
+        Returns:
+            Database ID of the saved config
+        """
+        with Session(self.engine) as session:
+            stmt = select(DBLLMConfig).where(DBLLMConfig.name == name)
+            db_config = session.execute(stmt).scalar_one_or_none()
+
+            if db_config:
+                # Update existing
+                db_config.model = config.model
+                db_config.max_output_tokens = config.max_output_tokens
+                db_config.verbosity = config.verbosity
+                db_config.reasoning_effort = config.reasoning_effort
+                db_config.description = description
+                db_config.updated_at = datetime.utcnow()
+            else:
+                # Create new
+                db_config = DBLLMConfig(
+                    name=name,
+                    model=config.model,
+                    max_output_tokens=config.max_output_tokens,
+                    verbosity=config.verbosity,
+                    reasoning_effort=config.reasoning_effort,
+                    description=description,
+                    is_active=True
+                )
+                session.add(db_config)
+
+            session.commit()
+            session.refresh(db_config)
+            return db_config.id
+
+    def delete_config(self, name: str) -> bool:
+        """
+        Delete an LLM configuration (soft delete by marking inactive).
+
+        Args:
+            name: The config name
+
+        Returns:
+            True if config was deleted, False if not found
+        """
+        with Session(self.engine) as session:
+            stmt = select(DBLLMConfig).where(DBLLMConfig.name == name)
+            db_config = session.execute(stmt).scalar_one_or_none()
+            if not db_config:
+                return False
+            db_config.is_active = False
+            db_config.updated_at = datetime.utcnow()
+            session.commit()
+            return True
+
+    def _db_config_to_langfuse(self, db_config: DBLLMConfig) -> LangfuseConfig:
+        """
+        Convert a database config model to LangfuseConfig.
+
+        Args:
+            db_config: The database model
+
+        Returns:
+            LangfuseConfig instance
+        """
+        config_dict = {
+            "model": db_config.model,
+        }
+        if db_config.max_output_tokens is not None:
+            config_dict["max_output_tokens"] = db_config.max_output_tokens
+        if db_config.verbosity is not None:
+            config_dict["verbosity"] = db_config.verbosity
+        if db_config.reasoning_effort is not None:
+            config_dict["reasoning_effort"] = db_config.reasoning_effort
+
+        return LangfuseConfig(**config_dict)
