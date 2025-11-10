@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Eye, Play, Trash2, Edit, BarChart2, XCircle } from 'lucide-react';
+import { Play, Trash2, Edit, BarChart2, XCircle } from 'lucide-react';
 import type { ExperimentRun } from '../types/index';
 import { api } from '../api/client';
 
@@ -8,7 +8,6 @@ interface PromptCardProps {
   runs: ExperimentRun[];
   onRunExperiments: (promptName: string) => void;
   onDeletePrompt: (promptName: string) => void;
-  onViewJSON: (promptName: string) => void;
   onEdit: (promptName: string) => void;
   onViewResults: (promptName: string, runId: string) => void;
   onRunsUpdated: () => void;
@@ -33,7 +32,6 @@ export default function PromptCard({
   runs,
   onRunExperiments,
   onDeletePrompt,
-  onViewJSON,
   onEdit,
   onViewResults,
   onRunsUpdated,
@@ -80,13 +78,6 @@ export default function PromptCard({
         <div className="flex items-start justify-between">
           <h3 className="text-lg font-semibold text-gray-900 flex-1">{promptName}</h3>
           <div className="flex gap-2 ml-4">
-            <button
-              onClick={() => onViewJSON(promptName)}
-              className="p-1.5 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
-              title="View JSON"
-            >
-              <Eye className="w-4 h-4" />
-            </button>
             <button
               onClick={() => onEdit(promptName)}
               className="p-1.5 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"

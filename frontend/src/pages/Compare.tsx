@@ -46,7 +46,7 @@ export default function Compare() {
   };
 
   const startAIEvaluation = useMutation({
-    mutationFn: (params: { prompt_name: string; review_prompt_id: string; model_evaluator: string }) => {
+    mutationFn: (params: { prompt_name: string; review_prompt_id: string; model_evaluator: string; run_id?: string }) => {
       console.log('Starting AI evaluation with params:', params);
       setIsEvaluating(true);
       return api.startBatchEvaluation(params);

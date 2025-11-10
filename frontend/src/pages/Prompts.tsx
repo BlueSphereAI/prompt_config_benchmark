@@ -1,14 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, X, Save, FileText } from 'lucide-react';
+import { Plus, X, Save, CheckCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import PromptCard from '../components/PromptCard';
 import type { ExperimentRun } from '../types/index';
-
-interface Prompt {
-  name: string;
-  messages: any[];
-}
 
 interface PromptWithRuns {
   name: string;
@@ -20,9 +15,10 @@ export function Prompts() {
   const [promptsWithRuns, setPromptsWithRuns] = useState<PromptWithRuns[]>([]);
   const [loading, setLoading] = useState(true);
   const [showEditor, setShowEditor] = useState(false);
-  const [editingPrompt, setEditingPrompt] = useState<Prompt | null>(null);
+  const [editingPromptName, setEditingPromptName] = useState<string>('');
+  const [jsonContent, setJsonContent] = useState<string>('');
+  const [jsonError, setJsonError] = useState<string>('');
   const [isCreatingNew, setIsCreatingNew] = useState(false);
-  const [viewMode, setViewMode] = useState<'preview' | 'edit'>('preview');
 
   useEffect(() => {
     fetchPromptsWithRuns();
@@ -47,9 +43,9 @@ export function Prompts() {
       );
 
       setPromptsWithRuns(promptsData);
+      setLoading(false);
     } catch (error) {
       console.error('Failed to fetch prompts:', error);
-    } finally {
       setLoading(false);
     }
   };
@@ -58,9 +54,7 @@ export function Prompts() {
     if (!confirm(`Delete prompt "${name}" and all its experiments?`)) return;
 
     try {
-      await fetch(`http://localhost:8000/api/prompts/delete/${encodeURIComponent(name)}`, {
-        method: 'DELETE',
-      });
+      await api.deletePrompt(name);
       await fetchPromptsWithRuns();
     } catch (error) {
       console.error('Failed to delete prompt:', error);
@@ -70,12 +64,7 @@ export function Prompts() {
 
   const handleRunExperiments = async (name: string) => {
     try {
-      const response = await fetch(
-        `http://localhost:8000/api/experiments/run-all-configs?prompt_name=${encodeURIComponent(name)}`,
-        { method: 'POST' }
-      );
-
-      const data = await response.json();
+      const data = await api.runAllConfigsForPrompt(name);
       console.log('Started run:', data);
 
       // Refresh to show the new run
@@ -94,24 +83,13 @@ export function Prompts() {
     }
   };
 
-  const handleViewJSON = async (name: string) => {
-    try {
-      const promptData = await api.getPromptDetail(name);
-      setEditingPrompt(promptData);
-      setViewMode('preview');
-      setIsCreatingNew(false);
-      setShowEditor(true);
-    } catch (error) {
-      console.error('Failed to load prompt:', error);
-      alert('Failed to load prompt');
-    }
-  };
-
   const handleEdit = async (name: string) => {
     try {
       const promptData = await api.getPromptDetail(name);
-      setEditingPrompt(promptData);
-      setViewMode('edit');
+      setEditingPromptName(promptData.name);
+      // Format JSON with 2-space indentation
+      setJsonContent(JSON.stringify(promptData.messages, null, 2));
+      setJsonError('');
       setIsCreatingNew(false);
       setShowEditor(true);
     } catch (error) {
@@ -125,22 +103,74 @@ export function Prompts() {
   };
 
   const handleCreateNew = () => {
-    setEditingPrompt({
-      name: '',
-      messages: [{ role: 'user', content: '' }],
-    });
-    setViewMode('edit');
+    setEditingPromptName('');
+    // Default prompt structure
+    const defaultMessages = [
+      { role: 'user', content: '' }
+    ];
+    setJsonContent(JSON.stringify(defaultMessages, null, 2));
+    setJsonError('');
     setIsCreatingNew(true);
     setShowEditor(true);
   };
 
-  const handleSavePrompt = async () => {
-    if (!editingPrompt) return;
+  const validateJSON = (json: string): { valid: boolean; messages?: any[]; error?: string } => {
+    if (!json.trim()) {
+      return { valid: false, error: 'JSON cannot be empty' };
+    }
 
     try {
-      await api.savePrompt(editingPrompt.name, editingPrompt.messages);
+      const parsed = JSON.parse(json);
+
+      // Validate it's an array
+      if (!Array.isArray(parsed)) {
+        return { valid: false, error: 'JSON must be an array of message objects' };
+      }
+
+      // Validate each message has required fields
+      for (let i = 0; i < parsed.length; i++) {
+        const msg = parsed[i];
+        if (!msg.role || !msg.content) {
+          return { valid: false, error: `Message at index ${i} must have 'role' and 'content' fields` };
+        }
+        if (!['system', 'user', 'assistant'].includes(msg.role)) {
+          return { valid: false, error: `Message at index ${i} has invalid role: ${msg.role}. Must be 'system', 'user', or 'assistant'` };
+        }
+      }
+
+      return { valid: true, messages: parsed };
+    } catch (e: any) {
+      return { valid: false, error: `Invalid JSON: ${e.message}` };
+    }
+  };
+
+  const handleValidate = () => {
+    const result = validateJSON(jsonContent);
+    if (result.valid) {
+      setJsonError('');
+    } else {
+      setJsonError(result.error || 'Unknown error');
+    }
+  };
+
+  const handleSavePrompt = async () => {
+    if (!editingPromptName.trim()) {
+      alert('Please enter a prompt name');
+      return;
+    }
+
+    const result = validateJSON(jsonContent);
+    if (!result.valid) {
+      setJsonError(result.error || 'Invalid JSON');
+      return;
+    }
+
+    try {
+      await api.savePrompt(editingPromptName, result.messages!);
       setShowEditor(false);
-      setEditingPrompt(null);
+      setEditingPromptName('');
+      setJsonContent('');
+      setJsonError('');
       await fetchPromptsWithRuns();
     } catch (error) {
       console.error('Failed to save prompt:', error);
@@ -148,33 +178,19 @@ export function Prompts() {
     }
   };
 
-  const updatePromptName = (name: string) => {
-    if (editingPrompt) {
-      setEditingPrompt({ ...editingPrompt, name });
-    }
-  };
+  const handleJsonChange = (value: string) => {
+    setJsonContent(value);
 
-  const updateMessage = (index: number, field: 'role' | 'content', value: string) => {
-    if (editingPrompt) {
-      const newMessages = [...editingPrompt.messages];
-      newMessages[index] = { ...newMessages[index], [field]: value };
-      setEditingPrompt({ ...editingPrompt, messages: newMessages });
-    }
-  };
-
-  const addMessage = () => {
-    if (editingPrompt) {
-      setEditingPrompt({
-        ...editingPrompt,
-        messages: [...editingPrompt.messages, { role: 'user', content: '' }],
-      });
-    }
-  };
-
-  const removeMessage = (index: number) => {
-    if (editingPrompt) {
-      const newMessages = editingPrompt.messages.filter((_, i) => i !== index);
-      setEditingPrompt({ ...editingPrompt, messages: newMessages });
+    // Live validation as user types
+    if (value.trim()) {
+      const result = validateJSON(value);
+      if (!result.valid) {
+        setJsonError(result.error || '');
+      } else {
+        setJsonError('');
+      }
+    } else {
+      setJsonError('');
     }
   };
 
@@ -187,43 +203,43 @@ export function Prompts() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       {/* Header */}
-      <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold text-gray-900">Prompt Library</h1>
-        <button
-          onClick={handleCreateNew}
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
-        >
-          <Plus className="w-5 h-5" />
-          New Prompt
-        </button>
+      <div className="mb-8">
+        <div className="flex justify-between items-center">
+          <h1 className="text-3xl font-bold text-gray-900">Prompt Library</h1>
+          <button
+            onClick={handleCreateNew}
+            className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+          >
+            <Plus className="w-5 h-5 mr-2" />
+            New Prompt
+          </button>
+        </div>
       </div>
 
       {/* Prompts Grid */}
       {promptsWithRuns.length === 0 ? (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <FileText className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 mb-2">No prompts yet</h3>
-          <p className="text-gray-500 mb-4">Create your first prompt to get started</p>
+        <div className="text-center py-12">
+          <p className="text-gray-500 mb-4">No prompts found</p>
           <button
             onClick={handleCreateNew}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
           >
-            Create Prompt
+            <Plus className="w-5 h-5 mr-2" />
+            Create Your First Prompt
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {promptsWithRuns.map((prompt) => (
             <PromptCard
               key={prompt.name}
               promptName={prompt.name}
               runs={prompt.runs}
-              onRunExperiments={handleRunExperiments}
-              onDeletePrompt={handleDelete}
-              onViewJSON={handleViewJSON}
               onEdit={handleEdit}
+              onDeletePrompt={handleDelete}
+              onRunExperiments={handleRunExperiments}
               onViewResults={handleViewResults}
               onRunsUpdated={fetchPromptsWithRuns}
             />
@@ -231,40 +247,31 @@ export function Prompts() {
         </div>
       )}
 
-      {/* Editor Modal */}
-      {showEditor && editingPrompt && (
+      {/* JSON Editor Modal */}
+      {showEditor && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
             {/* Modal Header */}
             <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
               <h2 className="text-xl font-bold text-gray-900">
-                {isCreatingNew ? 'New Prompt' : viewMode === 'edit' ? 'Edit Prompt' : 'View Prompt'}
+                {isCreatingNew ? 'New Prompt' : 'Edit Prompt'}
               </h2>
               <div className="flex gap-2">
-                {viewMode === 'preview' && !isCreatingNew && (
-                  <button
-                    onClick={() => setViewMode('edit')}
-                    className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors flex items-center gap-1"
-                  >
-                    <Edit2 className="w-4 h-4" />
-                    Edit
-                  </button>
-                )}
-                {viewMode === 'edit' && (
-                  <button
-                    onClick={handleSavePrompt}
-                    className="px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700 transition-colors flex items-center gap-1"
-                  >
-                    <Save className="w-4 h-4" />
-                    Save
-                  </button>
-                )}
+                <button
+                  onClick={handleSavePrompt}
+                  className="px-4 py-2 text-sm bg-green-600 text-white rounded hover:bg-green-700 transition-colors flex items-center gap-2"
+                >
+                  <Save className="w-4 h-4" />
+                  Save
+                </button>
                 <button
                   onClick={() => {
                     setShowEditor(false);
-                    setEditingPrompt(null);
+                    setEditingPromptName('');
+                    setJsonContent('');
+                    setJsonError('');
                   }}
-                  className="p-1.5 text-gray-500 hover:text-gray-700 rounded hover:bg-gray-100 transition-colors"
+                  className="p-2 text-gray-500 hover:text-gray-700 rounded hover:bg-gray-100 transition-colors"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -273,95 +280,79 @@ export function Prompts() {
 
             {/* Modal Content */}
             <div className="flex-1 overflow-y-auto p-6">
-              {viewMode === 'edit' ? (
-                <div className="space-y-4">
-                  {/* Prompt Name */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Prompt Name
+              <div className="space-y-4">
+                {/* Prompt Name */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Prompt Name
+                  </label>
+                  <input
+                    type="text"
+                    value={editingPromptName}
+                    onChange={(e) => setEditingPromptName(e.target.value)}
+                    disabled={!isCreatingNew}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+                    placeholder="my-prompt-name"
+                  />
+                  {!isCreatingNew && (
+                    <p className="mt-1 text-xs text-gray-500">Prompt name cannot be changed when editing</p>
+                  )}
+                </div>
+
+                {/* JSON Editor */}
+                <div>
+                  <div className="flex justify-between items-center mb-2">
+                    <label className="block text-sm font-medium text-gray-700">
+                      Messages (JSON)
                     </label>
-                    <input
-                      type="text"
-                      value={editingPrompt.name}
-                      onChange={(e) => updatePromptName(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      placeholder="my-prompt-name"
-                    />
+                    <button
+                      onClick={handleValidate}
+                      className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors flex items-center gap-1"
+                    >
+                      <CheckCircle className="w-3 h-3" />
+                      Validate
+                    </button>
                   </div>
-
-                  {/* Messages */}
-                  <div>
-                    <div className="flex justify-between items-center mb-2">
-                      <label className="block text-sm font-medium text-gray-700">
-                        Messages
-                      </label>
-                      <button
-                        onClick={addMessage}
-                        className="text-sm text-blue-600 hover:text-blue-700 font-medium"
-                      >
-                        + Add Message
-                      </button>
+                  <textarea
+                    value={jsonContent}
+                    onChange={(e) => handleJsonChange(e.target.value)}
+                    className={`w-full px-4 py-3 border rounded-lg font-mono text-sm focus:ring-2 focus:border-transparent ${
+                      jsonError
+                        ? 'border-red-300 focus:ring-red-500'
+                        : 'border-gray-300 focus:ring-blue-500'
+                    }`}
+                    rows={20}
+                    placeholder={`[\n  {\n    "role": "system",\n    "content": "You are a helpful assistant."\n  },\n  {\n    "role": "user",\n    "content": "Hello!"\n  }\n]`}
+                    spellCheck={false}
+                  />
+                  {jsonError && (
+                    <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+                      <p className="text-sm text-red-800 flex items-start gap-2">
+                        <span className="font-semibold">✗</span>
+                        <span className="flex-1">{jsonError}</span>
+                      </p>
                     </div>
-
-                    <div className="space-y-3">
-                      {editingPrompt.messages.map((message, index) => (
-                        <div key={index} className="border border-gray-200 rounded-lg p-3">
-                          <div className="flex gap-2 mb-2">
-                            <select
-                              value={message.role}
-                              onChange={(e) => updateMessage(index, 'role', e.target.value)}
-                              className="px-3 py-1.5 border border-gray-300 rounded bg-white text-sm"
-                            >
-                              <option value="system">system</option>
-                              <option value="user">user</option>
-                              <option value="assistant">assistant</option>
-                            </select>
-                            {editingPrompt.messages.length > 1 && (
-                              <button
-                                onClick={() => removeMessage(index)}
-                                className="ml-auto p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            )}
-                          </div>
-                          <textarea
-                            value={message.content}
-                            onChange={(e) => updateMessage(index, 'content', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono text-sm"
-                            rows={4}
-                            placeholder="Message content..."
-                          />
-                        </div>
-                      ))}
+                  )}
+                  {!jsonError && jsonContent.trim() && (
+                    <div className="mt-2 p-3 bg-green-50 border border-green-200 rounded-lg">
+                      <p className="text-sm text-green-800 flex items-start gap-2">
+                        <span className="font-semibold">✓</span>
+                        <span>Valid JSON</span>
+                      </p>
                     </div>
-                  </div>
+                  )}
                 </div>
-              ) : (
-                // Preview Mode
-                <div className="space-y-4">
-                  <div>
-                    <h3 className="text-sm font-medium text-gray-700 mb-2">Prompt Name</h3>
-                    <p className="text-gray-900 font-mono">{editingPrompt.name}</p>
-                  </div>
 
-                  <div>
-                    <h3 className="text-sm font-medium text-gray-700 mb-2">Messages</h3>
-                    <div className="space-y-3">
-                      {editingPrompt.messages.map((message, index) => (
-                        <div key={index} className="border border-gray-200 rounded-lg p-3">
-                          <div className="text-xs font-medium text-gray-500 uppercase mb-2">
-                            {message.role}
-                          </div>
-                          <div className="text-sm text-gray-900 whitespace-pre-wrap font-mono">
-                            {message.content}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                {/* Help Text */}
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <h4 className="text-sm font-medium text-blue-900 mb-2">Format Guide</h4>
+                  <ul className="text-xs text-blue-800 space-y-1">
+                    <li>• Must be a JSON array of message objects</li>
+                    <li>• Each message must have "role" (system/user/assistant) and "content" fields</li>
+                    <li>• Example: <code className="bg-blue-100 px-1 rounded">{`[{"role": "user", "content": "Hello"}]`}</code></li>
+                  </ul>
                 </div>
-              )}
+              </div>
             </div>
           </div>
         </div>

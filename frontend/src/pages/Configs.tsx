@@ -75,6 +75,9 @@ export function Configs() {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       is_active: true,
+      unacceptable_count: 0,
+      avg_duration_seconds: null,
+      avg_cost_usd: null,
     });
     setIsCreating(true);
     setShowEditor(true);

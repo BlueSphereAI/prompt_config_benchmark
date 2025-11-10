@@ -180,6 +180,28 @@ export const api = {
     return fetchAPI(`/prompts/metadata?active_only=${activeOnly}`);
   },
 
+  async getPromptDetail(name: string): Promise<any> {
+    return fetchAPI(`/prompts/detail/${encodeURIComponent(name)}`);
+  },
+
+  async savePrompt(name: string, messages: any[], description?: string, category?: string, tags?: string[]): Promise<any> {
+    return fetchAPI(`/prompts/update/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        messages,
+        description,
+        category,
+        tags,
+      }),
+    });
+  },
+
+  async deletePrompt(name: string): Promise<any> {
+    return fetchAPI(`/prompts/delete/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    });
+  },
+
   async deleteExperimentsByPrompt(promptName: string): Promise<any> {
     return fetchAPI(`/experiments/delete-by-prompt/${encodeURIComponent(promptName)}`, {
       method: 'DELETE',
