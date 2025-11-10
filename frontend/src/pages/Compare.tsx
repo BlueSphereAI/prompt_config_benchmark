@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, RefreshCw, X } from 'lucide-react';
+import { ArrowLeft, RefreshCw, X, ExternalLink } from 'lucide-react';
 import { api } from '../api/client';
 import { DragCarousel } from '../components/DragCarousel';
 import { RecommendationBanner } from '../components/RecommendationBanner';
@@ -356,9 +356,18 @@ export default function Compare() {
 
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Review Prompt Template
-                </label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-medium text-gray-700">
+                    Review Prompt Template
+                  </label>
+                  <Link
+                    to="/review-prompts"
+                    className="text-xs text-blue-600 hover:underline flex items-center gap-1"
+                  >
+                    Manage Templates
+                    <ExternalLink className="h-3 w-3" />
+                  </Link>
+                </div>
                 <select
                   value={selectedReviewPrompt}
                   onChange={(e) => setSelectedReviewPrompt(e.target.value)}
@@ -367,11 +376,36 @@ export default function Compare() {
                   <option value="">Select a template...</option>
                   {reviewPrompts?.map((prompt: any) => (
                     <option key={prompt.prompt_id} value={prompt.prompt_id}>
-                      {prompt.name} - {prompt.description}
+                      {prompt.name}
                     </option>
                   ))}
                 </select>
               </div>
+
+              {selectedReviewPrompt && reviewPrompts && (
+                <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+                  {(() => {
+                    const selected = reviewPrompts.find((p: any) => p.prompt_id === selectedReviewPrompt);
+                    if (!selected) return null;
+                    return (
+                      <>
+                        <p className="text-sm font-medium text-green-900 mb-2">{selected.name}</p>
+                        {selected.description && (
+                          <p className="text-xs text-green-800 mb-2">{selected.description}</p>
+                        )}
+                        <div className="flex flex-wrap gap-1.5">
+                          <span className="text-xs text-green-700 font-medium">Criteria:</span>
+                          {selected.criteria.map((c: string, idx: number) => (
+                            <span key={idx} className="px-1.5 py-0.5 bg-green-100 text-green-700 text-xs rounded">
+                              {c}
+                            </span>
+                          ))}
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
 
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                 <p className="text-xs text-blue-800">

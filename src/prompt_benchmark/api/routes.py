@@ -423,6 +423,217 @@ def get_review_prompt(
     return prompt
 
 
+@router.put("/review-prompts/{prompt_id}")
+def update_review_prompt(
+    prompt_id: str,
+    name: Optional[str] = None,
+    template: Optional[str] = None,
+    criteria: Optional[List[str]] = None,
+    default_model: Optional[str] = None,
+    description: Optional[str] = None,
+    system_prompt: Optional[str] = None,
+    storage: ResultStorage = Depends(get_storage),
+):
+    """Update an existing review prompt template."""
+    logger.info(f"Updating review prompt: {prompt_id}")
+
+    # Get existing prompt
+    existing = storage.get_review_prompt(prompt_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Review prompt not found")
+
+    # Update fields if provided
+    if name is not None:
+        existing.name = name
+    if template is not None:
+        existing.template = template
+    if criteria is not None:
+        existing.criteria = criteria
+    if default_model is not None:
+        existing.default_model = default_model
+    if description is not None:
+        existing.description = description
+    if system_prompt is not None:
+        existing.system_prompt = system_prompt
+
+    # Update timestamp
+    from datetime import datetime
+    existing.updated_at = datetime.utcnow()
+
+    # Save to storage
+    storage.save_review_prompt(existing)
+
+    logger.info(f"Successfully updated review prompt: {prompt_id}")
+    return existing
+
+
+@router.delete("/review-prompts/{prompt_id}")
+def delete_review_prompt(
+    prompt_id: str,
+    storage: ResultStorage = Depends(get_storage),
+):
+    """Delete a review prompt template (soft delete)."""
+    logger.info(f"Deleting review prompt: {prompt_id}")
+
+    # Get existing prompt
+    existing = storage.get_review_prompt(prompt_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Review prompt not found")
+
+    # Soft delete by setting is_active to False
+    existing.is_active = False
+    from datetime import datetime
+    existing.updated_at = datetime.utcnow()
+    storage.save_review_prompt(existing)
+
+    logger.info(f"Successfully deleted review prompt: {prompt_id}")
+    return {"status": "deleted", "prompt_id": prompt_id}
+
+
+@router.post("/review-prompts/{prompt_id}/duplicate")
+def duplicate_review_prompt(
+    prompt_id: str,
+    new_name: str = Query(..., description="Name for the duplicated prompt"),
+    storage: ResultStorage = Depends(get_storage),
+):
+    """Duplicate an existing review prompt with a new name."""
+    logger.info(f"Duplicating review prompt {prompt_id} to {new_name}")
+
+    # Get source prompt
+    source = storage.get_review_prompt(prompt_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source review prompt not found")
+
+    # Check if new name already exists
+    all_prompts = storage.get_all_review_prompts(active_only=False)
+    if any(p.name == new_name for p in all_prompts):
+        raise HTTPException(status_code=400, detail=f"Review prompt with name '{new_name}' already exists")
+
+    # Create new prompt with duplicated data
+    new_prompt = ReviewPrompt(
+        prompt_id=str(uuid.uuid4()),
+        name=new_name,
+        description=f"Copy of {source.name}" + (f": {source.description}" if source.description else ""),
+        template=source.template,
+        system_prompt=source.system_prompt,
+        criteria=source.criteria.copy(),
+        default_model=source.default_model,
+        created_by="system",  # Could be enhanced to track actual user
+    )
+
+    storage.save_review_prompt(new_prompt)
+
+    logger.info(f"Successfully duplicated review prompt: {prompt_id} -> {new_prompt.prompt_id}")
+    return new_prompt
+
+
+@router.post("/review-prompts/validate")
+def validate_review_prompt_template(
+    template: str,
+    criteria: List[str],
+    storage: ResultStorage = Depends(get_storage),
+):
+    """Validate a review prompt template."""
+    logger.info("Validating review prompt template")
+
+    errors = []
+    warnings = []
+
+    # Check for required variables
+    required_vars = ["{original_prompt}", "{num_configs}", "{all_responses}"]
+    for var in required_vars:
+        if var not in template:
+            errors.append(f"Missing required variable: {var}")
+
+    # Check if template mentions JSON output format
+    if "json" not in template.lower():
+        warnings.append("Template should instruct AI to return JSON format")
+
+    # Check if template mentions rankings
+    if "rank" not in template.lower():
+        warnings.append("Template should instruct AI to provide rankings")
+
+    # Check if criteria are mentioned in template
+    for criterion in criteria:
+        if criterion.lower() not in template.lower():
+            warnings.append(f"Criterion '{criterion}' not mentioned in template")
+
+    # Check template length
+    if len(template) < 100:
+        warnings.append("Template is very short - may not provide enough guidance")
+    elif len(template) > 5000:
+        warnings.append("Template is very long - may increase API costs")
+
+    is_valid = len(errors) == 0
+
+    return {
+        "valid": is_valid,
+        "errors": errors,
+        "warnings": warnings,
+        "required_variables": required_vars,
+        "found_variables": [var for var in required_vars if var in template]
+    }
+
+
+@router.get("/review-prompts/{prompt_id}/stats")
+def get_review_prompt_stats(
+    prompt_id: str,
+    storage: ResultStorage = Depends(get_storage),
+):
+    """Get usage statistics for a review prompt."""
+    logger.info(f"Getting stats for review prompt: {prompt_id}")
+
+    # Check if prompt exists
+    prompt = storage.get_review_prompt(prompt_id)
+    if not prompt:
+        raise HTTPException(status_code=404, detail="Review prompt not found")
+
+    from prompt_benchmark.storage import DBAIEvaluationBatch, DBAIEvaluation
+    from sqlalchemy.orm import Session as SQLSession
+    from sqlalchemy import func, select
+
+    with SQLSession(storage.engine) as session:
+        # Count number of batches using this prompt
+        batch_count = session.query(DBAIEvaluationBatch).filter(
+            DBAIEvaluationBatch.review_prompt_id == prompt_id
+        ).count()
+
+        # Get most recent batch
+        latest_batch = session.query(DBAIEvaluationBatch).filter(
+            DBAIEvaluationBatch.review_prompt_id == prompt_id
+        ).order_by(DBAIEvaluationBatch.started_at.desc()).first()
+
+        last_used = latest_batch.started_at if latest_batch else None
+
+        # Get average overall score from evaluations
+        avg_score_result = session.query(
+            func.avg(DBAIEvaluation.overall_score)
+        ).filter(
+            DBAIEvaluation.review_prompt_id == prompt_id
+        ).first()
+
+        avg_score = float(avg_score_result[0]) if avg_score_result[0] is not None else None
+
+        # Count total evaluations
+        total_evaluations = session.query(DBAIEvaluation).filter(
+            DBAIEvaluation.review_prompt_id == prompt_id
+        ).count()
+
+        # Get unique prompts evaluated
+        unique_prompts = session.query(DBAIEvaluationBatch.prompt_name).filter(
+            DBAIEvaluationBatch.review_prompt_id == prompt_id
+        ).distinct().count()
+
+        return {
+            "prompt_id": prompt_id,
+            "usage_count": batch_count,
+            "last_used": last_used,
+            "total_evaluations": total_evaluations,
+            "unique_prompts_evaluated": unique_prompts,
+            "average_score": avg_score,
+        }
+
+
 @router.post("/ai-evaluate/batch")
 def start_batch_evaluation(
     prompt_name: str,

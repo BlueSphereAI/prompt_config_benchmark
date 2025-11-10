@@ -114,6 +114,100 @@ export const api = {
     return fetchAPI(`/review-prompts?active_only=${activeOnly}`);
   },
 
+  async getReviewPrompt(promptId: string): Promise<any> {
+    return fetchAPI(`/review-prompts/${promptId}`);
+  },
+
+  async createReviewPrompt(params: {
+    name: string;
+    template: string;
+    criteria: string[];
+    default_model: string;
+    created_by: string;
+    description?: string;
+    system_prompt?: string;
+  }): Promise<any> {
+    const searchParams = new URLSearchParams();
+    searchParams.append('name', params.name);
+    searchParams.append('template', params.template);
+    searchParams.append('default_model', params.default_model);
+    searchParams.append('created_by', params.created_by);
+    if (params.description) {
+      searchParams.append('description', params.description);
+    }
+    if (params.system_prompt) {
+      searchParams.append('system_prompt', params.system_prompt);
+    }
+    // Criteria is array - append multiple times
+    params.criteria.forEach(c => searchParams.append('criteria', c));
+
+    return fetchAPI(`/review-prompts?${searchParams.toString()}`, {
+      method: 'POST',
+    });
+  },
+
+  async updateReviewPrompt(promptId: string, params: {
+    name?: string;
+    template?: string;
+    criteria?: string[];
+    default_model?: string;
+    description?: string;
+    system_prompt?: string;
+  }): Promise<any> {
+    const searchParams = new URLSearchParams();
+    if (params.name !== undefined) searchParams.append('name', params.name);
+    if (params.template !== undefined) searchParams.append('template', params.template);
+    if (params.default_model !== undefined) searchParams.append('default_model', params.default_model);
+    if (params.description !== undefined) searchParams.append('description', params.description);
+    if (params.system_prompt !== undefined) searchParams.append('system_prompt', params.system_prompt);
+    if (params.criteria) {
+      params.criteria.forEach(c => searchParams.append('criteria', c));
+    }
+
+    return fetchAPI(`/review-prompts/${promptId}?${searchParams.toString()}`, {
+      method: 'PUT',
+    });
+  },
+
+  async deleteReviewPrompt(promptId: string): Promise<any> {
+    return fetchAPI(`/review-prompts/${promptId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  async duplicateReviewPrompt(promptId: string, newName: string): Promise<any> {
+    return fetchAPI(`/review-prompts/${promptId}/duplicate?new_name=${encodeURIComponent(newName)}`, {
+      method: 'POST',
+    });
+  },
+
+  async validateReviewPrompt(template: string, criteria: string[]): Promise<{
+    valid: boolean;
+    errors: string[];
+    warnings: string[];
+    required_variables: string[];
+    found_variables: string[];
+  }> {
+    const searchParams = new URLSearchParams();
+    searchParams.append('template', template);
+    criteria.forEach(c => searchParams.append('criteria', c));
+
+    return fetchAPI(`/review-prompts/validate?${searchParams.toString()}`, {
+      method: 'POST',
+    });
+  },
+
+  async getReviewPromptStats(promptId: string): Promise<{
+    prompt_id: string;
+    usage_count: number;
+    last_used: string | null;
+    total_evaluations: number;
+    unique_prompts_evaluated: number;
+    average_score: number | null;
+  }> {
+    return fetchAPI(`/review-prompts/${promptId}/stats`);
+  },
+
   async startBatchEvaluation(params: {
     prompt_name: string;
     review_prompt_id: string;
