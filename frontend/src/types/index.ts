@@ -3,6 +3,7 @@ export interface Experiment {
   experiment_id: string;
   prompt_name: string;
   config_name: string;
+  run_id?: string | null;
   rendered_prompt: string;
   config_json: Record<string, any>;
   response: string;
@@ -16,8 +17,21 @@ export interface Experiment {
   estimated_cost_usd: number;
   error: string | null;
   success: boolean;
+  is_acceptable: boolean;
   metadata_json: Record<string, any> | null;
   created_at: string;
+}
+
+export interface ExperimentRun {
+  run_id: string;
+  prompt_name: string;
+  started_at: string;
+  completed_at: string | null;
+  status: 'running' | 'experiment_completed' | 'analysis_completed' | 'failed';
+  num_configs: number;
+  total_cost: number | null;
+  created_at: string;
+  recommended_config?: string | null;
 }
 
 export interface Evaluation {

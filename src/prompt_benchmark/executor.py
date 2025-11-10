@@ -419,7 +419,8 @@ class ExperimentExecutor:
         configs: Dict[str, LangfuseConfig],
         prompt_variables: Optional[Dict] = None,
         metadata: Optional[Dict] = None,
-        storage = None
+        storage = None,
+        run_id: Optional[str] = None
     ) -> Dict[str, ExperimentResult]:
         """
         Run multiple experiments with different configs on the same prompt in parallel (async).
@@ -430,6 +431,7 @@ class ExperimentExecutor:
             prompt_variables: Variables for the prompt
             metadata: Additional metadata
             storage: Optional ResultStorage instance to save results incrementally
+            run_id: Optional run ID to associate with all experiments
 
         Returns:
             Dictionary mapping config names to results
@@ -461,6 +463,10 @@ class ExperimentExecutor:
                 result = await coro
                 completed += 1
 
+                # Set run_id if provided
+                if run_id:
+                    result.run_id = run_id
+
                 # Find which config this result is for
                 config_name = result.config_name
                 results[config_name] = result
@@ -478,6 +484,12 @@ class ExperimentExecutor:
             logger.info("No storage provided - results will be returned but not saved")
             # Run all tasks in parallel without saving
             results_list = await asyncio.gather(*tasks)
+
+            # Set run_id if provided
+            if run_id:
+                for result in results_list:
+                    result.run_id = run_id
+
             # Map results back to config names
             results = {name: result for name, result in zip(config_names, results_list)}
 

@@ -143,6 +143,7 @@ class ExperimentResult(BaseModel):
     experiment_id: str = Field(..., description="ID of the experiment")
     prompt_name: str = Field(..., description="Name of the prompt used")
     config_name: str = Field(..., description="Name of the configuration used")
+    run_id: Optional[str] = Field(None, description="ID of the run this experiment belongs to")
 
     # Request details
     rendered_prompt: str = Field(..., description="The actual prompt sent to the LLM")
@@ -174,6 +175,30 @@ class ExperimentResult(BaseModel):
 
     # Metadata
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ExperimentRun(BaseModel):
+    """
+    A single run of experiments for a prompt.
+
+    Groups all experiments executed together when "Run All Configs" is clicked.
+    """
+    run_id: str = Field(..., description="Unique run identifier")
+    prompt_name: str = Field(..., description="Name of the prompt this run is for")
+
+    # Timing
+    started_at: datetime = Field(..., description="When the run started")
+    completed_at: Optional[datetime] = Field(None, description="When the run completed")
+
+    # Status: running, experiment_completed, analysis_completed
+    status: str = Field(..., description="Current status of the run")
+
+    # Aggregates
+    num_configs: int = Field(..., description="Number of configs tested in this run")
+    total_cost: Optional[float] = Field(None, description="Total cost of all experiments in this run")
+
+    # Metadata
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

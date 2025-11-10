@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, RefreshCw, X } from 'lucide-react';
 import { api } from '../api/client';
@@ -8,6 +8,8 @@ import { RecommendationBanner } from '../components/RecommendationBanner';
 
 export default function Compare() {
   const { promptName } = useParams<{ promptName: string }>();
+  const [searchParams] = useSearchParams();
+  const runId = searchParams.get('run_id');
   const queryClient = useQueryClient();
   const [rankedIds, setRankedIds] = useState<string[]>([]);
   const [hasChanges, setHasChanges] = useState(false);
@@ -17,10 +19,10 @@ export default function Compare() {
   const [evaluatorModel] = useState('gpt-5'); // Always use GPT-5 with reasoning
   const [isEvaluating, setIsEvaluating] = useState(false);
 
-  // Fetch all compare data
+  // Fetch all compare data (with optional run_id filtering)
   const { data: compareData, isLoading, error, refetch } = useQuery({
-    queryKey: ['compare', promptName],
-    queryFn: () => api.getCompareData(promptName!),
+    queryKey: ['compare', promptName, runId],
+    queryFn: () => api.getCompareData(promptName!, runId || undefined),
     enabled: !!promptName,
   });
 
@@ -399,6 +401,7 @@ export default function Compare() {
                       prompt_name: promptName,
                       review_prompt_id: selectedReviewPrompt,
                       model_evaluator: evaluatorModel,
+                      run_id: runId || undefined,
                     });
                   }
                 }}

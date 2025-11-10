@@ -4,6 +4,7 @@ import type {
   EvaluationCreate,
   ConfigComparison,
   DashboardStats,
+  ExperimentRun,
 } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
@@ -55,6 +56,11 @@ export const api = {
     return fetchAPI<string[]>('/prompts');
   },
 
+  async getPromptsList(): Promise<string[]> {
+    const response = await fetchAPI<{ prompts: Array<{ name: string }> }>('/prompts/list');
+    return response.prompts.map(p => p.name);
+  },
+
   async getConfigs(): Promise<string[]> {
     return fetchAPI<string[]>('/configs');
   },
@@ -97,8 +103,11 @@ export const api = {
   },
 
   // AI-Assisted Ranking System
-  async getCompareData(promptName: string): Promise<any> {
-    return fetchAPI(`/compare/${encodeURIComponent(promptName)}`);
+  async getCompareData(promptName: string, runId?: string): Promise<any> {
+    const url = runId
+      ? `/compare/${encodeURIComponent(promptName)}?run_id=${encodeURIComponent(runId)}`
+      : `/compare/${encodeURIComponent(promptName)}`;
+    return fetchAPI(url);
   },
 
   async getReviewPrompts(activeOnly = true): Promise<any[]> {
@@ -110,6 +119,7 @@ export const api = {
     review_prompt_id: string;
     model_evaluator?: string;
     parallel?: boolean;
+    run_id?: string;
   }): Promise<any> {
     const searchParams = new URLSearchParams();
     searchParams.append('prompt_name', params.prompt_name);
@@ -119,6 +129,9 @@ export const api = {
     }
     if (params.parallel !== undefined) {
       searchParams.append('parallel', String(params.parallel));
+    }
+    if (params.run_id) {
+      searchParams.append('run_id', params.run_id);
     }
     return fetchAPI(`/ai-evaluate/batch?${searchParams.toString()}`, {
       method: 'POST',
@@ -226,6 +239,21 @@ export const api = {
     return fetchAPI(`/experiments/${experimentId}/acceptability`, {
       method: 'PUT',
       body: JSON.stringify({ is_acceptable: isAcceptable }),
+    });
+  },
+
+  // Experiment Runs
+  async getRunsForPrompt(promptName: string): Promise<ExperimentRun[]> {
+    return fetchAPI<ExperimentRun[]>(`/prompts/${encodeURIComponent(promptName)}/runs`);
+  },
+
+  async getRun(runId: string): Promise<{ run: ExperimentRun; experiments: Experiment[] }> {
+    return fetchAPI(`/runs/${encodeURIComponent(runId)}`);
+  },
+
+  async deleteRun(runId: string): Promise<{ status: string; run_id: string }> {
+    return fetchAPI(`/runs/${encodeURIComponent(runId)}`, {
+      method: 'DELETE',
     });
   },
 };

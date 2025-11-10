@@ -7,11 +7,11 @@ from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session as SQLSession
-from sqlalchemy import Integer, func
+from sqlalchemy import Integer, func, text
 
 from prompt_benchmark.storage import ResultStorage, DBExperimentResult, DBEvaluation
 from prompt_benchmark.analyzer import BenchmarkAnalyzer
-from prompt_benchmark.models import Evaluation, ReviewPrompt, HumanRanking, RankingWeights, Prompt
+from prompt_benchmark.models import Evaluation, ReviewPrompt, HumanRanking, RankingWeights, Prompt, ExperimentRun
 from prompt_benchmark.evaluator import run_batch_evaluation
 from prompt_benchmark.recommender import calculate_recommendation
 from prompt_benchmark.ranker import calculate_agreement
@@ -28,6 +28,8 @@ from prompt_benchmark.api.schemas import (
     LLMConfigResponse,
     LLMConfigCreate,
     LLMConfigUpdate,
+    ExperimentRunResponse,
+    RunWithExperimentsResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -426,6 +428,7 @@ def start_batch_evaluation(
     prompt_name: str,
     review_prompt_id: str,
     model_evaluator: str = "gpt-4-turbo",
+    run_id: Optional[str] = Query(None, description="Filter to specific run"),
     parallel: bool = True,
     background_tasks: BackgroundTasks = BackgroundTasks(),
     storage: ResultStorage = Depends(get_storage),
@@ -436,8 +439,13 @@ def start_batch_evaluation(
     if not review_prompt:
         raise HTTPException(status_code=404, detail="Review prompt not found")
 
-    # Check if experiments exist
-    experiments = storage.get_results_by_prompt(prompt_name, success_only=True)
+    # Check if experiments exist (filter by run_id if provided)
+    if run_id:
+        experiments = storage.get_results_by_run(run_id)
+        experiments = [exp for exp in experiments if exp.success]
+    else:
+        experiments = storage.get_results_by_prompt(prompt_name, success_only=True)
+
     if not experiments:
         raise HTTPException(
             status_code=404,
@@ -446,7 +454,7 @@ def start_batch_evaluation(
 
     # Run evaluation in background
     def run_evaluation():
-        run_batch_evaluation(prompt_name, review_prompt, model_evaluator, storage, parallel)
+        run_batch_evaluation(prompt_name, review_prompt, model_evaluator, storage, parallel, run_id)
 
     background_tasks.add_task(run_evaluation)
 
@@ -587,11 +595,18 @@ def update_weights(
 @router.get("/compare/{prompt_name}")
 def get_compare_data(
     prompt_name: str,
+    run_id: Optional[str] = Query(None, description="Filter experiments by run_id"),
     storage: ResultStorage = Depends(get_storage),
 ):
     """Get all data needed for compare page (experiments, AI evals, rankings, recommendation)."""
-    # Get experiments
-    experiments = storage.get_results_by_prompt(prompt_name, success_only=True)
+    # Get experiments (filtered by run_id if provided)
+    if run_id:
+        experiments = storage.get_results_by_run(run_id)
+        # Filter for successful only
+        experiments = [exp for exp in experiments if exp.success]
+    else:
+        experiments = storage.get_results_by_prompt(prompt_name, success_only=True)
+
     if not experiments:
         raise HTTPException(status_code=404, detail=f"No experiments found for prompt: {prompt_name}")
 
@@ -610,19 +625,27 @@ def get_compare_data(
             "is_acceptable": exp.is_acceptable,
         })
 
-    # Get AI evaluations
-    ai_evaluations = storage.get_ai_evaluations_by_prompt(prompt_name)
+    # Get AI evaluations - filter by experiments in this run
+    experiment_ids = {exp.experiment_id for exp in experiments}
+    all_ai_evaluations = storage.get_ai_evaluations_by_prompt(prompt_name)
+
+    # Filter to only evaluations for experiments in the current view
+    ai_evaluations = [e for e in all_ai_evaluations if e.experiment_id in experiment_ids]
+
     ai_evaluation_data = None
     if ai_evaluations:
-        # Get the batch info
+        # Get the batch info from the first evaluation
         batch_id = ai_evaluations[0].batch_id
         batch = storage.get_ai_batch(batch_id)
+
+        # Filter ranked_experiment_ids to only those in the current experiments
+        filtered_ranked_ids = [eid for eid in batch.ranked_experiment_ids if eid in experiment_ids]
 
         ai_evaluation_data = {
             "batch_id": batch.batch_id,
             "model_evaluator": batch.model_evaluator,
             "review_prompt_id": batch.review_prompt_id,
-            "ranked_experiment_ids": batch.ranked_experiment_ids,
+            "ranked_experiment_ids": filtered_ranked_ids,
             "evaluations": [
                 {
                     "experiment_id": e.experiment_id,
@@ -970,13 +993,26 @@ def list_configs(
         stmt = stmt.order_by(DBLLMConfig.created_at.desc())
         db_configs = session.execute(stmt).scalars().all()
 
-        # Count unacceptable experiments for each config
+        # Count unacceptable experiments and calculate averages for each config
+        from sqlalchemy import func
         config_responses = []
         for c in db_configs:
             unacceptable_count = session.query(DBExperimentResult).filter(
                 DBExperimentResult.config_name == c.name,
                 DBExperimentResult.is_acceptable == False
             ).count()
+
+            # Calculate average duration and cost for successful experiments
+            stats = session.query(
+                func.avg(DBExperimentResult.duration_seconds),
+                func.avg(DBExperimentResult.estimated_cost_usd)
+            ).filter(
+                DBExperimentResult.config_name == c.name,
+                DBExperimentResult.success == True
+            ).first()
+
+            avg_duration = float(stats[0]) if stats[0] is not None else None
+            avg_cost = float(stats[1]) if stats[1] is not None else None
 
             config_responses.append(
                 LLMConfigResponse(
@@ -989,7 +1025,9 @@ def list_configs(
                     created_at=c.created_at,
                     updated_at=c.updated_at,
                     is_active=c.is_active,
-                    unacceptable_count=unacceptable_count
+                    unacceptable_count=unacceptable_count,
+                    avg_duration_seconds=avg_duration,
+                    avg_cost_usd=avg_cost
                 )
             )
 
@@ -1233,23 +1271,50 @@ async def run_all_configs_for_prompt(
         logger.error("No active configs found in database")
         raise HTTPException(status_code=404, detail="No active configs found")
 
+    # Create a run record
+    run_id = f"run_{uuid.uuid4().hex[:16]}"
+    run = ExperimentRun(
+        run_id=run_id,
+        prompt_name=prompt_name,
+        started_at=datetime.utcnow(),
+        status="running",
+        num_configs=len(configs),
+        total_cost=0.0
+    )
+    storage.create_run(run)
+    logger.info(f"Created run {run_id} for prompt: {prompt_name}")
+
     # Add to running experiments
     running_experiments.add(prompt_name)
     logger.info(f"Added '{prompt_name}' to running experiments. Current running: {running_experiments}")
 
     # Run experiments in background
     async def run_experiments():
-        logger.info(f"Background task started for prompt: {prompt_name}")
+        logger.info(f"Background task started for prompt: {prompt_name}, run_id: {run_id}")
         try:
             executor = ExperimentExecutor()
             logger.info(f"Executor created, starting batch run for {len(configs)} configs")
 
-            # Pass storage to save results incrementally
-            await executor.run_batch_async(prompt, configs, storage=storage)
+            # Pass storage and run_id to save results incrementally
+            await executor.run_batch_async(prompt, configs, storage=storage, run_id=run_id)
 
-            logger.info(f"Batch run completed successfully for prompt: {prompt_name}")
+            # Update run status to experiment_completed
+            total_cost = sum(
+                exp.estimated_cost_usd or 0.0
+                for exp in storage.get_results_by_run(run_id)
+            )
+            storage.update_run_status(
+                run_id,
+                status="experiment_completed",
+                completed_at=datetime.utcnow(),
+                total_cost=total_cost
+            )
+
+            logger.info(f"Batch run completed successfully for prompt: {prompt_name}, run_id: {run_id}")
         except Exception as e:
-            logger.error(f"Error in background task for prompt '{prompt_name}': {str(e)}", exc_info=True)
+            logger.error(f"Error in background task for prompt '{prompt_name}', run_id {run_id}: {str(e)}", exc_info=True)
+            # Mark run as failed (we should add this status)
+            storage.update_run_status(run_id, status="failed", completed_at=datetime.utcnow())
         finally:
             # Remove from running experiments when done
             running_experiments.discard(prompt_name)
@@ -1258,11 +1323,195 @@ async def run_all_configs_for_prompt(
     # Add the async function directly to background tasks (don't use asyncio.run)
     background_tasks.add_task(run_experiments)
 
-    logger.info(f"Background task scheduled for prompt: {prompt_name}")
+    logger.info(f"Background task scheduled for prompt: {prompt_name}, run_id: {run_id}")
 
     return {
         "status": "started",
         "prompt_name": prompt_name,
+        "run_id": run_id,
         "num_configs": len(configs),
         "message": f"Running {len(configs)} configs for prompt '{prompt_name}' in background"
     }
+
+
+# =============================================================================
+# Experiment Run Management Endpoints
+# =============================================================================
+
+@router.get("/prompts/{prompt_name}/runs", response_model=List[ExperimentRunResponse])
+def get_runs_for_prompt(
+    prompt_name: str,
+    storage: ResultStorage = Depends(get_storage)
+):
+    """Get all runs for a specific prompt."""
+    logger.info(f"Getting runs for prompt: {prompt_name}")
+
+    runs = storage.get_runs_by_prompt(prompt_name)
+
+    # For each run, calculate recommended config based on rankings
+    response_runs = []
+    for run in runs:
+        # Get experiments for this run
+        experiments = storage.get_results_by_run(run.run_id)
+
+        # Get human rankings for this prompt
+        rankings = storage.get_human_rankings_by_prompt(prompt_name)
+
+        # Find recommended config (best ranked in this run)
+        recommended_config = None
+        if rankings and experiments:
+            # Get the most recent ranking
+            latest_ranking = rankings[0]
+            ranked_ids = latest_ranking.ranked_experiment_ids
+
+            # Find the highest ranked experiment in this run
+            experiment_ids_in_run = {exp.experiment_id for exp in experiments}
+            for exp_id in ranked_ids:
+                if exp_id in experiment_ids_in_run:
+                    # Find the experiment and get its config name
+                    exp = next((e for e in experiments if e.experiment_id == exp_id), None)
+                    if exp:
+                        recommended_config = exp.config_name
+                        break
+        elif experiments:
+            # Fallback to AI evaluations if no human rankings
+            # Query AI evaluations directly from database
+            with SQLSession(storage.engine) as session:
+                best_score = -1
+                for exp in experiments:
+                    # Get AI evaluation for this experiment
+                    ai_eval = session.execute(text("""
+                        SELECT overall_score FROM ai_evaluations
+                        WHERE experiment_id = :exp_id
+                        ORDER BY evaluated_at DESC
+                        LIMIT 1
+                    """), {"exp_id": exp.experiment_id}).first()
+
+                    if ai_eval and ai_eval[0] > best_score:
+                        best_score = ai_eval[0]
+                        recommended_config = exp.config_name
+
+        response_runs.append(ExperimentRunResponse(
+            run_id=run.run_id,
+            prompt_name=run.prompt_name,
+            started_at=run.started_at,
+            completed_at=run.completed_at,
+            status=run.status,
+            num_configs=run.num_configs,
+            total_cost=run.total_cost,
+            created_at=run.created_at,
+            recommended_config=recommended_config
+        ))
+
+    return response_runs
+
+
+@router.get("/runs/{run_id}", response_model=RunWithExperimentsResponse)
+def get_run_details(
+    run_id: str,
+    storage: ResultStorage = Depends(get_storage)
+):
+    """Get details of a specific run with its experiments."""
+    logger.info(f"Getting run details for: {run_id}")
+
+    run = storage.get_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
+
+    experiments = storage.get_results_by_run(run_id)
+
+    # Convert to response models
+    with SQLSession(storage.engine) as session:
+        exp_responses = []
+        for exp in experiments:
+            # Get DB record for the experiment
+            db_exp = session.query(DBExperimentResult).filter(
+                DBExperimentResult.experiment_id == exp.experiment_id
+            ).first()
+
+            if db_exp:
+                exp_responses.append(ExperimentResponse(
+                    id=db_exp.id,
+                    experiment_id=db_exp.experiment_id,
+                    prompt_name=db_exp.prompt_name,
+                    config_name=db_exp.config_name,
+                    run_id=db_exp.run_id,
+                    rendered_prompt=db_exp.rendered_prompt,
+                    config_json=json.loads(db_exp.config_json),
+                    response=db_exp.response,
+                    finish_reason=db_exp.finish_reason,
+                    start_time=db_exp.start_time,
+                    end_time=db_exp.end_time,
+                    duration_seconds=db_exp.duration_seconds,
+                    prompt_tokens=db_exp.prompt_tokens or 0,
+                    completion_tokens=db_exp.completion_tokens or 0,
+                    total_tokens=db_exp.total_tokens or 0,
+                    estimated_cost_usd=db_exp.estimated_cost_usd or 0.0,
+                    error=db_exp.error,
+                    success=db_exp.success,
+                    is_acceptable=db_exp.is_acceptable,
+                    metadata_json=json.loads(db_exp.metadata_json) if db_exp.metadata_json else {},
+                    created_at=db_exp.created_at
+                ))
+
+    # Get recommended config
+    rankings = storage.get_human_rankings_by_prompt(run.prompt_name)
+    recommended_config = None
+    if rankings and experiments:
+        latest_ranking = rankings[0]
+        ranked_ids = latest_ranking.ranked_experiment_ids
+        experiment_ids_in_run = {exp.experiment_id for exp in experiments}
+        for exp_id in ranked_ids:
+            if exp_id in experiment_ids_in_run:
+                exp = next((e for e in experiments if e.experiment_id == exp_id), None)
+                if exp:
+                    recommended_config = exp.config_name
+                    break
+    elif experiments:
+        # Fallback to AI evaluations if no human rankings
+        with SQLSession(storage.engine) as session:
+            best_score = -1
+            for exp in experiments:
+                ai_eval = session.execute(text("""
+                    SELECT overall_score FROM ai_evaluations
+                    WHERE experiment_id = :exp_id
+                    ORDER BY evaluated_at DESC
+                    LIMIT 1
+                """), {"exp_id": exp.experiment_id}).first()
+
+                if ai_eval and ai_eval[0] > best_score:
+                    best_score = ai_eval[0]
+                    recommended_config = exp.config_name
+
+    run_response = ExperimentRunResponse(
+        run_id=run.run_id,
+        prompt_name=run.prompt_name,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
+        status=run.status,
+        num_configs=run.num_configs,
+        total_cost=run.total_cost,
+        created_at=run.created_at,
+        recommended_config=recommended_config
+    )
+
+    return RunWithExperimentsResponse(
+        run=run_response,
+        experiments=exp_responses
+    )
+
+
+@router.delete("/runs/{run_id}")
+def delete_run(
+    run_id: str,
+    storage: ResultStorage = Depends(get_storage)
+):
+    """Delete a specific run and all its experiments."""
+    logger.info(f"Deleting run: {run_id}")
+
+    success = storage.delete_run(run_id)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
+
+    logger.info(f"Successfully deleted run: {run_id}")
+    return {"status": "deleted", "run_id": run_id}

@@ -404,7 +404,8 @@ async def batch_evaluate_prompt(
     review_prompt: ReviewPrompt,
     evaluator_model: str,
     storage: ResultStorage,
-    parallel: bool = True  # Kept for API compatibility, but not used with single-call approach
+    parallel: bool = True,  # Kept for API compatibility, but not used with single-call approach
+    run_id: Optional[str] = None
 ) -> AIEvaluationBatch:
     """
     Evaluate all experiments for a prompt using AI with comparative ranking.
@@ -417,12 +418,17 @@ async def batch_evaluate_prompt(
         evaluator_model: Model to use for evaluation (e.g., "gpt-5")
         storage: Database storage
         parallel: Unused (kept for API compat), evaluation is now single comparative call
+        run_id: Optional run ID to filter experiments to specific run
 
     Returns:
         AIEvaluationBatch with all evaluations and rankings
     """
-    # 1. Get all successful experiments for this prompt
-    experiments = storage.get_results_by_prompt(prompt_name, success_only=True)
+    # 1. Get all successful experiments for this prompt (filter by run if provided)
+    if run_id:
+        experiments = storage.get_results_by_run(run_id)
+        experiments = [exp for exp in experiments if exp.success]
+    else:
+        experiments = storage.get_results_by_prompt(prompt_name, success_only=True)
 
     if not experiments:
         raise ValueError(f"No successful experiments found for prompt: {prompt_name}")
@@ -645,7 +651,8 @@ def run_batch_evaluation(
     review_prompt: ReviewPrompt,
     evaluator_model: str,
     storage: ResultStorage,
-    parallel: bool = True
+    parallel: bool = True,
+    run_id: Optional[str] = None
 ) -> AIEvaluationBatch:
     """
     Synchronous wrapper for batch_evaluate_prompt.
@@ -656,12 +663,13 @@ def run_batch_evaluation(
         evaluator_model: Model to use for evaluation
         storage: Database storage
         parallel: Run evaluations in parallel
+        run_id: Optional run ID to filter experiments
 
     Returns:
         AIEvaluationBatch with results
     """
     return asyncio.run(
         batch_evaluate_prompt(
-            prompt_name, review_prompt, evaluator_model, storage, parallel
+            prompt_name, review_prompt, evaluator_model, storage, parallel, run_id
         )
     )

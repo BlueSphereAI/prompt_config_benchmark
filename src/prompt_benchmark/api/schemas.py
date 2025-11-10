@@ -10,6 +10,7 @@ class ExperimentResponse(BaseModel):
     experiment_id: str
     prompt_name: str
     config_name: str
+    run_id: Optional[str]
     rendered_prompt: str
     config_json: Dict[str, Any]
     response: str
@@ -134,6 +135,8 @@ class LLMConfigResponse(BaseModel):
     updated_at: datetime
     is_active: bool
     unacceptable_count: int = 0
+    avg_duration_seconds: Optional[float] = None
+    avg_cost_usd: Optional[float] = None
 
 
 class LLMConfigCreate(BaseModel):
@@ -153,3 +156,25 @@ class LLMConfigUpdate(BaseModel):
     verbosity: Optional[str] = None
     reasoning_effort: Optional[str] = None
     description: Optional[str] = None
+
+
+class ExperimentRunResponse(BaseModel):
+    """Response model for experiment runs."""
+    run_id: str
+    prompt_name: str
+    started_at: datetime
+    completed_at: Optional[datetime]
+    status: str  # running, experiment_completed, analysis_completed
+    num_configs: int
+    total_cost: Optional[float]
+    created_at: datetime
+    recommended_config: Optional[str] = None  # Best config based on rankings
+
+    class Config:
+        from_attributes = True
+
+
+class RunWithExperimentsResponse(BaseModel):
+    """Response model for a run with its experiments."""
+    run: ExperimentRunResponse
+    experiments: List[ExperimentResponse]

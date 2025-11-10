@@ -19,6 +19,7 @@ from .models import (
     AIEvaluation,
     AIEvaluationBatch,
     ExperimentResult,
+    ExperimentRun,
     Evaluation,
     HumanRanking,
     LangfuseConfig,
@@ -41,6 +42,7 @@ class DBExperimentResult(Base):
     experiment_id = Column(String, unique=True, nullable=False, index=True)
     prompt_name = Column(String, nullable=False, index=True)
     config_name = Column(String, nullable=False, index=True)
+    run_id = Column(String, nullable=True, index=True)  # Links experiments in the same run
 
     # Request details (JSON serialized)
     rendered_prompt = Column(Text, nullable=False)
@@ -72,6 +74,30 @@ class DBExperimentResult(Base):
 
     # Metadata (JSON serialized)
     metadata_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class DBExperimentRun(Base):
+    """Database model for experiment runs."""
+
+    __tablename__ = "experiment_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(String, unique=True, nullable=False, index=True)
+    prompt_name = Column(String, nullable=False, index=True)
+
+    # Timing
+    started_at = Column(DateTime, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+
+    # Status: running, experiment_completed, analysis_completed
+    status = Column(String, nullable=False)
+
+    # Aggregates
+    num_configs = Column(Integer, nullable=False)
+    total_cost = Column(Float, nullable=True)
+
+    # Metadata
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
@@ -274,6 +300,7 @@ class ResultStorage:
                 experiment_id=result.experiment_id,
                 prompt_name=result.prompt_name,
                 config_name=result.config_name,
+                run_id=result.run_id,
                 rendered_prompt=result.rendered_prompt,
                 config_json=result.config.model_dump_json(),
                 response=result.response,
@@ -491,6 +518,7 @@ class ResultStorage:
             experiment_id=db_result.experiment_id,
             prompt_name=db_result.prompt_name,
             config_name=db_result.config_name,
+            run_id=db_result.run_id,
             rendered_prompt=db_result.rendered_prompt,
             config=LangfuseConfig.model_validate_json(db_result.config_json),
             response=db_result.response,
@@ -1036,3 +1064,183 @@ class ResultStorage:
             config_dict["reasoning_effort"] = db_config.reasoning_effort
 
         return LangfuseConfig(**config_dict)
+
+    # ========================================================================
+    # Experiment Run Management
+    # ========================================================================
+
+    def create_run(self, run: ExperimentRun) -> int:
+        """
+        Create a new experiment run record.
+
+        Args:
+            run: The ExperimentRun to create
+
+        Returns:
+            Database ID of the created run
+        """
+        with Session(self.engine) as session:
+            db_run = DBExperimentRun(
+                run_id=run.run_id,
+                prompt_name=run.prompt_name,
+                started_at=run.started_at,
+                completed_at=run.completed_at,
+                status=run.status,
+                num_configs=run.num_configs,
+                total_cost=run.total_cost,
+                created_at=run.created_at
+            )
+            session.add(db_run)
+            session.commit()
+            session.refresh(db_run)
+            return db_run.id
+
+    def get_run(self, run_id: str) -> Optional[ExperimentRun]:
+        """
+        Get a run by its ID.
+
+        Args:
+            run_id: The run ID
+
+        Returns:
+            ExperimentRun or None if not found
+        """
+        with Session(self.engine) as session:
+            stmt = select(DBExperimentRun).where(DBExperimentRun.run_id == run_id)
+            db_run = session.execute(stmt).scalar_one_or_none()
+            if not db_run:
+                return None
+            return self._db_run_to_model(db_run)
+
+    def get_runs_by_prompt(self, prompt_name: str) -> List[ExperimentRun]:
+        """
+        Get all runs for a specific prompt.
+
+        Args:
+            prompt_name: The prompt name
+
+        Returns:
+            List of ExperimentRuns, ordered by most recent first
+        """
+        with Session(self.engine) as session:
+            stmt = select(DBExperimentRun).where(
+                DBExperimentRun.prompt_name == prompt_name
+            ).order_by(DBExperimentRun.started_at.desc())
+            db_runs = session.execute(stmt).scalars().all()
+            return [self._db_run_to_model(r) for r in db_runs]
+
+    def update_run_status(
+        self,
+        run_id: str,
+        status: str,
+        completed_at: Optional[datetime] = None,
+        total_cost: Optional[float] = None
+    ) -> bool:
+        """
+        Update a run's status and optionally its completion time and cost.
+
+        Args:
+            run_id: The run ID
+            status: New status (running, experiment_completed, analysis_completed)
+            completed_at: Optional completion timestamp
+            total_cost: Optional total cost
+
+        Returns:
+            True if updated successfully, False if run not found
+        """
+        with Session(self.engine) as session:
+            stmt = select(DBExperimentRun).where(DBExperimentRun.run_id == run_id)
+            db_run = session.execute(stmt).scalar_one_or_none()
+
+            if not db_run:
+                return False
+
+            db_run.status = status
+            if completed_at is not None:
+                db_run.completed_at = completed_at
+            if total_cost is not None:
+                db_run.total_cost = total_cost
+
+            session.commit()
+            return True
+
+    def delete_run(self, run_id: str) -> bool:
+        """
+        Delete a run and all its associated experiments and evaluations.
+
+        Args:
+            run_id: The run ID
+
+        Returns:
+            True if deleted successfully, False if run not found
+        """
+        with Session(self.engine) as session:
+            # Get the run first to check if it exists
+            stmt = select(DBExperimentRun).where(DBExperimentRun.run_id == run_id)
+            db_run = session.execute(stmt).scalar_one_or_none()
+
+            if not db_run:
+                return False
+
+            # Get all experiment IDs for this run
+            exp_stmt = select(DBExperimentResult).where(
+                DBExperimentResult.run_id == run_id
+            )
+            experiments = session.execute(exp_stmt).scalars().all()
+            experiment_ids = [exp.experiment_id for exp in experiments]
+
+            # Delete AI evaluations for these experiments
+            if experiment_ids:
+                for exp_id in experiment_ids:
+                    session.execute(
+                        DBAIEvaluation.__table__.delete().where(
+                            DBAIEvaluation.experiment_id == exp_id
+                        )
+                    )
+
+            # Delete experiments for this run
+            session.execute(
+                DBExperimentResult.__table__.delete().where(
+                    DBExperimentResult.run_id == run_id
+                )
+            )
+
+            # Delete the run itself
+            session.execute(
+                DBExperimentRun.__table__.delete().where(
+                    DBExperimentRun.run_id == run_id
+                )
+            )
+
+            session.commit()
+            return True
+
+    def get_results_by_run(self, run_id: str) -> List[ExperimentResult]:
+        """
+        Get all experiment results for a specific run.
+
+        Args:
+            run_id: The run ID
+
+        Returns:
+            List of ExperimentResults
+        """
+        with Session(self.engine) as session:
+            stmt = select(DBExperimentResult).where(
+                DBExperimentResult.run_id == run_id
+            )
+            db_results = session.execute(stmt).scalars().all()
+            return [self._db_result_to_model(r) for r in db_results]
+
+    def _db_run_to_model(self, db_run: DBExperimentRun) -> ExperimentRun:
+        """Convert database run model to Pydantic model."""
+        return ExperimentRun(
+            run_id=db_run.run_id,
+            prompt_name=db_run.prompt_name,
+            started_at=db_run.started_at,
+            completed_at=db_run.completed_at,
+            status=db_run.status,
+            num_configs=db_run.num_configs,
+            total_cost=db_run.total_cost,
+            created_at=db_run.created_at
+        )

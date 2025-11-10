@@ -13,6 +13,8 @@ interface LLMConfig {
   updated_at: string;
   is_active: boolean;
   unacceptable_count: number;
+  avg_duration_seconds: number | null;
+  avg_cost_usd: number | null;
 }
 
 export function Configs() {
@@ -161,6 +163,12 @@ export function Configs() {
                     Max Tokens
                   </th>
                   <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
+                    Avg Time
+                  </th>
+                  <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
+                    Avg Cost
+                  </th>
+                  <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
                     Unacceptable
                   </th>
                   <th className="relative py-3.5 pl-3 pr-4 sm:pr-0">
@@ -185,6 +193,12 @@ export function Configs() {
                     </td>
                     <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
                       {config.max_output_tokens?.toLocaleString() || '-'}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+                      {config.avg_duration_seconds != null ? `${config.avg_duration_seconds.toFixed(1)}s` : '-'}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+                      {config.avg_cost_usd != null ? `$${config.avg_cost_usd.toFixed(4)}` : '-'}
                     </td>
                     <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
                       {config.unacceptable_count > 0 ? (
