@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Langfuse Config Copy</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .config-example {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        pre {
+            background: #282c34;
+            color: #abb2bf;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+        button {
+            background: #7c3aed;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #6d28d9;
+        }
+        .success {
+            background: #10b981;
+        }
+    </style>
+</head>
+<body>
+    <h1>Langfuse Config Copy - Test Page</h1>
+
+    <h2>Example 1: GPT-5 with all fields</h2>
+    <div class="config-example">
+        <strong>Input:</strong>
+        <pre>{
+  "name": "gpt5-standard",
+  "model": "gpt-5",
+  "max_output_tokens": 8000,
+  "verbosity": "medium",
+  "reasoning_effort": "medium"
+}</pre>
+        <button onclick="testConfig1()">Copy Langfuse Config</button>
+        <span id="result1"></span>
+    </div>
+
+    <h2>Example 2: GPT-5-Mini (Fast tier)</h2>
+    <div class="config-example">
+        <strong>Input:</strong>
+        <pre>{
+  "name": "gpt5-mini-fast",
+  "model": "gpt-5-mini",
+  "max_output_tokens": 2000,
+  "verbosity": "low",
+  "reasoning_effort": "minimal"
+}</pre>
+        <button onclick="testConfig2()">Copy Langfuse Config</button>
+        <span id="result2"></span>
+    </div>
+
+    <h2>Example 3: GPT-5 with null fields (should be omitted)</h2>
+    <div class="config-example">
+        <strong>Input:</strong>
+        <pre>{
+  "name": "gpt5-custom",
+  "model": "gpt-5",
+  "max_output_tokens": 5000,
+  "verbosity": null,
+  "reasoning_effort": "high"
+}</pre>
+        <button onclick="testConfig3()">Copy Langfuse Config</button>
+        <span id="result3"></span>
+    </div>
+
+    <h2>Expected Output Format:</h2>
+    <pre>{
+  "model": "smart",
+  "max_output_tokens": 8000,
+  "verbosity": "medium",
+  "reasoning_effort": "medium"
+}</pre>
+
+    <script>
+        function copyLangfuseConfig(config, resultId) {
+            // Map model names to Langfuse tier names
+            let modelTier;
+            if (config.model === 'gpt-5') {
+                modelTier = 'smart';
+            } else if (config.model === 'gpt-5-mini') {
+                modelTier = 'fast';
+            } else {
+                modelTier = config.model;
+            }
+
+            // Build Langfuse config JSON, omitting null/undefined fields
+            const langfuseConfig = {
+                model: modelTier,
+            };
+
+            if (config.max_output_tokens != null) {
+                langfuseConfig.max_output_tokens = config.max_output_tokens;
+            }
+            if (config.verbosity) {
+                langfuseConfig.verbosity = config.verbosity;
+            }
+            if (config.reasoning_effort) {
+                langfuseConfig.reasoning_effort = config.reasoning_effort;
+            }
+
+            // Format as pretty JSON and copy to clipboard
+            const jsonString = JSON.stringify(langfuseConfig, null, 2);
+
+            navigator.clipboard.writeText(jsonString).then(() => {
+                const resultSpan = document.getElementById(resultId);
+                resultSpan.textContent = '✓ Copied!';
+                resultSpan.style.color = '#10b981';
+
+                // Show what was copied
+                console.log('Copied to clipboard:');
+                console.log(jsonString);
+                alert('Copied to clipboard:\n\n' + jsonString);
+
+                setTimeout(() => {
+                    resultSpan.textContent = '';
+                }, 2000);
+            }).catch(err => {
+                alert('Failed to copy: ' + err.message);
+            });
+        }
+
+        function testConfig1() {
+            const config = {
+                name: "gpt5-standard",
+                model: "gpt-5",
+                max_output_tokens: 8000,
+                verbosity: "medium",
+                reasoning_effort: "medium"
+            };
+            copyLangfuseConfig(config, 'result1');
+        }
+
+        function testConfig2() {
+            const config = {
+                name: "gpt5-mini-fast",
+                model: "gpt-5-mini",
+                max_output_tokens: 2000,
+                verbosity: "low",
+                reasoning_effort: "minimal"
+            };
+            copyLangfuseConfig(config, 'result2');
+        }
+
+        function testConfig3() {
+            const config = {
+                name: "gpt5-custom",
+                model: "gpt-5",
+                max_output_tokens: 5000,
+                verbosity: null,
+                reasoning_effort: "high"
+            };
+            copyLangfuseConfig(config, 'result3');
+        }
+    </script>
+</body>
+</html>

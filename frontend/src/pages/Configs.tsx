@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, Copy, Save, X } from 'lucide-react';
+import { Plus, Edit2, Trash2, Copy, Save, X, ClipboardCopy, Check, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { api } from '../api/client';
 
 interface LLMConfig {
@@ -15,7 +15,12 @@ interface LLMConfig {
   unacceptable_count: number;
   avg_duration_seconds: number | null;
   avg_cost_usd: number | null;
+  avg_ai_score: number | null;
+  ai_evaluation_count: number;
 }
+
+type SortMethod = 'model' | 'aiScore' | 'time' | 'cost' | 'unacceptable';
+type SortDirection = 'asc' | 'desc';
 
 export function Configs() {
   const [configs, setConfigs] = useState<LLMConfig[]>([]);
@@ -23,38 +28,85 @@ export function Configs() {
   const [editingConfig, setEditingConfig] = useState<LLMConfig | null>(null);
   const [showEditor, setShowEditor] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [copiedConfig, setCopiedConfig] = useState<string | null>(null);
+  const [sortMethod, setSortMethod] = useState<SortMethod>('model');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
 
   useEffect(() => {
     fetchConfigs();
   }, []);
 
+  const sortConfigs = (data: LLMConfig[], method: SortMethod, direction: SortDirection): LLMConfig[] => {
+    const sorted = [...data];
+    const dirMultiplier = direction === 'asc' ? 1 : -1;
+
+    switch (method) {
+      case 'model': {
+        // Sort by model, reasoning_effort, then verbosity
+        const modelOrder = { 'gpt-5': 1, 'gpt-5-mini': 2, 'gpt-5-nano': 3 };
+        const reasoningOrder = { 'high': 1, 'medium': 2, 'low': 3, 'minimal': 4, '': 5, null: 5 };
+        const verbosityOrder = { 'high': 1, 'medium': 2, 'low': 3, '': 4, null: 4 };
+
+        return sorted.sort((a, b) => {
+          const modelA = modelOrder[a.model as keyof typeof modelOrder] || 999;
+          const modelB = modelOrder[b.model as keyof typeof modelOrder] || 999;
+          if (modelA !== modelB) return (modelA - modelB) * dirMultiplier;
+
+          const reasoningA = reasoningOrder[a.reasoning_effort as keyof typeof reasoningOrder] || 999;
+          const reasoningB = reasoningOrder[b.reasoning_effort as keyof typeof reasoningOrder] || 999;
+          if (reasoningA !== reasoningB) return (reasoningA - reasoningB) * dirMultiplier;
+
+          const verbosityA = verbosityOrder[a.verbosity as keyof typeof verbosityOrder] || 999;
+          const verbosityB = verbosityOrder[b.verbosity as keyof typeof verbosityOrder] || 999;
+          return (verbosityA - verbosityB) * dirMultiplier;
+        });
+      }
+
+      case 'aiScore': {
+        // Sort by AI score, nulls always last
+        return sorted.sort((a, b) => {
+          if (a.avg_ai_score === null && b.avg_ai_score === null) return 0;
+          if (a.avg_ai_score === null) return 1;
+          if (b.avg_ai_score === null) return -1;
+          return (b.avg_ai_score - a.avg_ai_score) * dirMultiplier;
+        });
+      }
+
+      case 'time': {
+        // Sort by average time, nulls always last
+        return sorted.sort((a, b) => {
+          if (a.avg_duration_seconds === null && b.avg_duration_seconds === null) return 0;
+          if (a.avg_duration_seconds === null) return 1;
+          if (b.avg_duration_seconds === null) return -1;
+          return (a.avg_duration_seconds - b.avg_duration_seconds) * dirMultiplier;
+        });
+      }
+
+      case 'cost': {
+        // Sort by average cost, nulls always last
+        return sorted.sort((a, b) => {
+          if (a.avg_cost_usd === null && b.avg_cost_usd === null) return 0;
+          if (a.avg_cost_usd === null) return 1;
+          if (b.avg_cost_usd === null) return -1;
+          return (a.avg_cost_usd - b.avg_cost_usd) * dirMultiplier;
+        });
+      }
+
+      case 'unacceptable': {
+        // Sort by unacceptable count
+        return sorted.sort((a, b) => (b.unacceptable_count - a.unacceptable_count) * dirMultiplier);
+      }
+
+      default:
+        return sorted;
+    }
+  };
+
   const fetchConfigs = async () => {
     try {
       setLoading(true);
       const data = await api.listConfigs(true);
-
-      // Sort configs by model, reasoning_effort, then verbosity
-      const modelOrder = { 'gpt-5': 1, 'gpt-5-mini': 2, 'gpt-5-nano': 3 };
-      const reasoningOrder = { 'high': 1, 'medium': 2, 'low': 3, 'minimal': 4, '': 5, null: 5 };
-      const verbosityOrder = { 'high': 1, 'medium': 2, 'low': 3, '': 4, null: 4 };
-
-      const sorted = data.sort((a, b) => {
-        // First by model
-        const modelA = modelOrder[a.model as keyof typeof modelOrder] || 999;
-        const modelB = modelOrder[b.model as keyof typeof modelOrder] || 999;
-        if (modelA !== modelB) return modelA - modelB;
-
-        // Then by reasoning_effort
-        const reasoningA = reasoningOrder[a.reasoning_effort as keyof typeof reasoningOrder] || 999;
-        const reasoningB = reasoningOrder[b.reasoning_effort as keyof typeof reasoningOrder] || 999;
-        if (reasoningA !== reasoningB) return reasoningA - reasoningB;
-
-        // Finally by verbosity
-        const verbosityA = verbosityOrder[a.verbosity as keyof typeof verbosityOrder] || 999;
-        const verbosityB = verbosityOrder[b.verbosity as keyof typeof verbosityOrder] || 999;
-        return verbosityA - verbosityB;
-      });
-
+      const sorted = sortConfigs(data, sortMethod, sortDirection);
       setConfigs(sorted);
     } catch (error) {
       console.error('Failed to fetch configs:', error);
@@ -62,6 +114,46 @@ export function Configs() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSortChange = (method: SortMethod) => {
+    // If clicking the same column, toggle direction
+    if (method === sortMethod) {
+      const newDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+      setSortDirection(newDirection);
+      const sorted = sortConfigs(configs, method, newDirection);
+      setConfigs(sorted);
+    } else {
+      // New column - use default direction for that column
+      const defaultDirection = method === 'aiScore' || method === 'unacceptable' ? 'desc' : 'asc';
+      setSortMethod(method);
+      setSortDirection(defaultDirection);
+      const sorted = sortConfigs(configs, method, defaultDirection);
+      setConfigs(sorted);
+    }
+  };
+
+  const SortableHeader = ({ column, label }: { column: SortMethod; label: string }) => {
+    const isActive = sortMethod === column;
+    const showArrow = isActive;
+
+    return (
+      <th
+        className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 cursor-pointer select-none group"
+        onClick={() => handleSortChange(column)}
+      >
+        <div className="flex items-center gap-1 hover:text-blue-600 transition-colors">
+          <span>{label}</span>
+          <span className={`transition-opacity ${showArrow ? 'opacity-100' : 'opacity-0 group-hover:opacity-50'}`}>
+            {isActive ? (
+              sortDirection === 'asc' ? <ArrowUp size={14} /> : <ArrowDown size={14} />
+            ) : (
+              <ArrowUpDown size={14} />
+            )}
+          </span>
+        </div>
+      </th>
+    );
   };
 
   const handleCreate = () => {
@@ -78,6 +170,8 @@ export function Configs() {
       unacceptable_count: 0,
       avg_duration_seconds: null,
       avg_cost_usd: null,
+      avg_ai_score: null,
+      ai_evaluation_count: 0,
     });
     setIsCreating(true);
     setShowEditor(true);
@@ -116,6 +210,51 @@ export function Configs() {
     }
   };
 
+  const generateLangfuseJson = (config: LLMConfig): string => {
+    // Map model names to Langfuse tier names
+    let modelTier: string;
+    if (config.model === 'gpt-5') {
+      modelTier = 'smart'; // or 'reasoning' - using 'smart' as default
+    } else if (config.model === 'gpt-5-mini') {
+      modelTier = 'fast';
+    } else {
+      // For unknown models (like gpt-5-nano), pass through unchanged
+      modelTier = config.model;
+    }
+
+    // Build Langfuse config JSON, omitting null/undefined fields
+    const langfuseConfig: Record<string, string | number> = {
+      model: modelTier,
+    };
+
+    if (config.max_output_tokens != null) {
+      langfuseConfig.max_output_tokens = config.max_output_tokens;
+    }
+    if (config.verbosity) {
+      langfuseConfig.verbosity = config.verbosity;
+    }
+    if (config.reasoning_effort) {
+      langfuseConfig.reasoning_effort = config.reasoning_effort;
+    }
+
+    // Format as pretty JSON
+    return JSON.stringify(langfuseConfig, null, 2);
+  };
+
+  const handleCopyLangfuseConfig = async (config: LLMConfig) => {
+    try {
+      const jsonString = generateLangfuseJson(config);
+      await navigator.clipboard.writeText(jsonString);
+
+      // Show visual feedback
+      setCopiedConfig(config.name);
+      setTimeout(() => setCopiedConfig(null), 2000);
+    } catch (error) {
+      console.error('Failed to copy Langfuse config:', error);
+      alert('Failed to copy config to clipboard. Please ensure you are using HTTPS or localhost.');
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -133,7 +272,24 @@ export function Configs() {
             Manage your LLM model configurations for benchmarking.
           </p>
         </div>
-        <div className="mt-4 sm:mt-0 sm:ml-16 sm:flex-none">
+        <div className="mt-4 sm:mt-0 sm:ml-16 sm:flex-none flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <label htmlFor="sort-select" className="text-sm font-medium text-gray-700">
+              Sort by:
+            </label>
+            <select
+              id="sort-select"
+              value={sortMethod}
+              onChange={(e) => handleSortChange(e.target.value as SortMethod)}
+              className="rounded-md border-gray-300 py-2 pl-3 pr-10 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            >
+              <option value="model">Model</option>
+              <option value="aiScore">AI Score</option>
+              <option value="time">Avg Time</option>
+              <option value="cost">Avg Cost</option>
+              <option value="unacceptable">Unacceptable</option>
+            </select>
+          </div>
           <button
             onClick={handleCreate}
             className="flex items-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-center text-sm font-semibold text-white shadow-sm hover:bg-blue-500"
@@ -153,9 +309,7 @@ export function Configs() {
                   <th className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-0">
                     Name
                   </th>
-                  <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
-                    Model
-                  </th>
+                  <SortableHeader column="model" label="Model" />
                   <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
                     Reasoning
                   </th>
@@ -165,15 +319,10 @@ export function Configs() {
                   <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
                     Max Tokens
                   </th>
-                  <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
-                    Avg Time
-                  </th>
-                  <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
-                    Avg Cost
-                  </th>
-                  <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">
-                    Unacceptable
-                  </th>
+                  <SortableHeader column="time" label="Avg Time" />
+                  <SortableHeader column="cost" label="Avg Cost" />
+                  <SortableHeader column="aiScore" label="AI Score" />
+                  <SortableHeader column="unacceptable" label="Unacceptable" />
                   <th className="relative py-3.5 pl-3 pr-4 sm:pr-0">
                     <span className="sr-only">Actions</span>
                   </th>
@@ -204,6 +353,18 @@ export function Configs() {
                       {config.avg_cost_usd != null ? `$${config.avg_cost_usd.toFixed(4)}` : '-'}
                     </td>
                     <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+                      {config.avg_ai_score != null ? (
+                        <span className="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800">
+                          {config.avg_ai_score.toFixed(1)}/10
+                          {config.ai_evaluation_count > 0 && (
+                            <span className="ml-1 text-blue-600">({config.ai_evaluation_count})</span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">-</span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
                       {config.unacceptable_count > 0 ? (
                         <span className="inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800">
                           {config.unacceptable_count}
@@ -220,6 +381,21 @@ export function Configs() {
                           title="Edit"
                         >
                           <Edit2 size={16} />
+                        </button>
+                        <button
+                          onClick={() => handleCopyLangfuseConfig(config)}
+                          className={`p-2 rounded transition-colors ${
+                            copiedConfig === config.name
+                              ? 'text-green-600 bg-green-50'
+                              : 'text-purple-600 hover:bg-purple-50'
+                          }`}
+                          title={generateLangfuseJson(config)}
+                        >
+                          {copiedConfig === config.name ? (
+                            <Check size={16} />
+                          ) : (
+                            <ClipboardCopy size={16} />
+                          )}
                         </button>
                         <button
                           onClick={() => handleClone(config.name)}

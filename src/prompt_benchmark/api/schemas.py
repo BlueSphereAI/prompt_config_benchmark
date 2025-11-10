@@ -137,6 +137,8 @@ class LLMConfigResponse(BaseModel):
     unacceptable_count: int = 0
     avg_duration_seconds: Optional[float] = None
     avg_cost_usd: Optional[float] = None
+    avg_ai_score: Optional[float] = None
+    ai_evaluation_count: int = 0
 
 
 class LLMConfigCreate(BaseModel):

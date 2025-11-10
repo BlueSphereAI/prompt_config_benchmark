@@ -980,7 +980,7 @@ def list_configs(
     storage: ResultStorage = Depends(get_storage),
 ):
     """List all LLM configurations."""
-    from prompt_benchmark.storage import DBLLMConfig
+    from prompt_benchmark.storage import DBLLMConfig, DBAIEvaluation
     from sqlalchemy.orm import Session as SQLSession
 
     logger.info(f"Listing configs (active_only={active_only})")
@@ -1014,6 +1014,28 @@ def list_configs(
             avg_duration = float(stats[0]) if stats[0] is not None else None
             avg_cost = float(stats[1]) if stats[1] is not None else None
 
+            # Calculate average AI score for this config
+            ai_score_stats = session.query(
+                func.avg(DBAIEvaluation.overall_score),
+                func.count(DBAIEvaluation.evaluation_id)
+            ).join(
+                DBExperimentResult,
+                DBAIEvaluation.experiment_id == DBExperimentResult.experiment_id
+            ).filter(
+                DBExperimentResult.config_name == c.name,
+                DBExperimentResult.success == True
+            ).first()
+
+            # Defensive handling of AI score results
+            if ai_score_stats and ai_score_stats[0] is not None:
+                avg_ai_score = float(ai_score_stats[0])
+                ai_eval_count = int(ai_score_stats[1]) if ai_score_stats[1] else 0
+                logger.debug(f"Config {c.name}: AI score={avg_ai_score:.2f}, count={ai_eval_count}")
+            else:
+                avg_ai_score = None
+                ai_eval_count = 0
+                logger.debug(f"Config {c.name}: No AI evaluations found")
+
             config_responses.append(
                 LLMConfigResponse(
                     name=c.name,
@@ -1027,7 +1049,9 @@ def list_configs(
                     is_active=c.is_active,
                     unacceptable_count=unacceptable_count,
                     avg_duration_seconds=avg_duration,
-                    avg_cost_usd=avg_cost
+                    avg_cost_usd=avg_cost,
+                    avg_ai_score=avg_ai_score,
+                    ai_evaluation_count=ai_eval_count
                 )
             )
 
