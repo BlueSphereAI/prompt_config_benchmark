@@ -174,7 +174,17 @@ class ExperimentExecutor:
 
         # Prepare API call parameters
         api_params = self._prepare_api_params(config, messages)
-        logger.debug(f"API params for {experiment_id}: {api_params}")
+
+        # Log parameters for verification (especially GPT-5 specific ones)
+        log_params = {
+            "model": api_params.get("model"),
+            "max_tokens": api_params.get("max_tokens") or api_params.get("max_completion_tokens"),
+            "temperature": api_params.get("temperature"),
+            "verbosity": api_params.get("verbosity"),
+            "reasoning_effort": api_params.get("reasoning_effort"),
+        }
+        logger.info(f"Experiment {experiment_id} API params: {log_params}")
+        logger.debug(f"Full API params for {experiment_id}: {api_params}")
 
         # Execute with timing
         start_time = datetime.utcnow()
@@ -264,15 +274,15 @@ class ExperimentExecutor:
             params["presence_penalty"] = config.presence_penalty
 
         # GPT-5 specific parameters
-        # Note: verbosity and reasoning_effort are stored in config but
-        # the actual API parameters may differ - adjust based on OpenAI docs
+        # GPT-5 supports direct verbosity and reasoning_effort parameters
         if config.model.startswith("gpt-5"):
             if config.verbosity is not None:
-                # Map to actual API parameter when available
-                pass  # TODO: Update when API supports this
+                # Verbosity is a direct parameter
+                params["verbosity"] = config.verbosity
+
             if config.reasoning_effort is not None:
-                # Map to actual API parameter when available
-                pass  # TODO: Update when API supports this
+                # Reasoning effort is a direct parameter
+                params["reasoning_effort"] = config.reasoning_effort
 
         return params
 

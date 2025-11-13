@@ -490,7 +490,7 @@ async def batch_evaluate_prompt(
         else:
             # Add GPT-5 specific parameters for high-quality evaluation
             api_params["reasoning_effort"] = "high"
-            api_params["verbosity"] = "high"
+            api_params["verbosity"] = "medium"
 
         response = await client.chat.completions.create(**api_params)
 
@@ -649,7 +649,7 @@ async def evaluate_single_experiment(
         else:
             # Add GPT-5 specific parameters for high-quality evaluation
             api_params["reasoning_effort"] = "high"
-            api_params["verbosity"] = "high"
+            api_params["verbosity"] = "medium"
 
         response = await client.chat.completions.create(**api_params)
 
