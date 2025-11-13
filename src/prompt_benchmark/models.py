@@ -21,6 +21,7 @@ class VerbosityLevel(str, Enum):
 class ReasoningEffort(str, Enum):
     """GPT-5 reasoning effort levels."""
     MINIMAL = "minimal"
+    LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
 

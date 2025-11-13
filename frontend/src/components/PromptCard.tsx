@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Play, Trash2, Edit, BarChart2, XCircle } from 'lucide-react';
+import { Play, Trash2, Edit, BarChart2, XCircle, Sparkles, Loader2 } from 'lucide-react';
 import type { ExperimentRun } from '../types/index';
 import { api } from '../api/client';
 
@@ -11,6 +11,8 @@ interface PromptCardProps {
   onEdit: (promptName: string) => void;
   onViewResults: (promptName: string, runId: string) => void;
   onRunsUpdated: () => void;
+  onStartAIEvaluation: (promptName: string, runId: string) => void;
+  evaluatingRunId?: string | null;
 }
 
 const STATUS_COLORS = {
@@ -35,6 +37,8 @@ export default function PromptCard({
   onEdit,
   onViewResults,
   onRunsUpdated,
+  onStartAIEvaluation,
+  evaluatingRunId,
 }: PromptCardProps) {
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
 
@@ -121,36 +125,18 @@ export default function PromptCard({
                 key={run.run_id}
                 className="p-3 hover:bg-gray-50 rounded transition-colors border border-gray-100"
               >
-                {/* Header Row: Timestamp, Status, Actions */}
+                {/* Header Row: Timestamp & Status */}
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-xs text-gray-600">
                     {formatDate(run.started_at)}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                        STATUS_COLORS[run.status]
-                      }`}
-                    >
-                      {STATUS_LABELS[run.status]}
-                    </span>
-                    <button
-                      onClick={() => onViewResults(promptName, run.run_id)}
-                      className="p-1 text-blue-600 hover:bg-blue-50 rounded transition-colors"
-                      title="View Results"
-                      disabled={run.status === 'running'}
-                    >
-                      <BarChart2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDeleteRun(run.run_id)}
-                      className="p-1 text-red-600 hover:bg-red-50 rounded transition-colors disabled:opacity-50"
-                      title="Delete Run"
-                      disabled={deletingRunId === run.run_id}
-                    >
-                      <XCircle className="w-4 h-4" />
-                    </button>
-                  </div>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                      STATUS_COLORS[run.status]
+                    }`}
+                  >
+                    {STATUS_LABELS[run.status]}
+                  </span>
                 </div>
 
                 {/* Config Info Row */}
@@ -161,9 +147,63 @@ export default function PromptCard({
                 )}
 
                 {/* Stats Row */}
-                <div className="flex items-center justify-between text-xs text-gray-600">
+                <div className="flex items-center justify-between text-xs text-gray-600 mb-2">
                   <span>{run.num_configs} configs</span>
+                  {run.avg_duration !== null && (
+                    <span className="font-medium">⏱ {run.avg_duration.toFixed(1)}s avg</span>
+                  )}
                   <span className="font-medium">{formatCost(run.total_cost)}</span>
+                </div>
+
+                {/* Actions Row */}
+                <div className="flex items-center justify-between gap-2 pt-2 border-t border-gray-100">
+                  <div className="flex items-center gap-1.5">
+                    {/* AI Evaluation Button - Only show for experiment_completed status */}
+                    {run.status === 'experiment_completed' && (
+                      <button
+                        onClick={() => onStartAIEvaluation(promptName, run.run_id)}
+                        disabled={evaluatingRunId === run.run_id}
+                        className="px-2.5 py-1.5 bg-blue-600 text-white text-xs font-medium rounded hover:bg-blue-700 transition-all disabled:opacity-70 disabled:cursor-not-allowed flex items-center gap-1.5 shadow-sm"
+                        title="Run AI Evaluation"
+                      >
+                        {evaluatingRunId === run.run_id ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            Evaluating...
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-3.5 h-3.5" />
+                            AI Evaluation
+                          </>
+                        )}
+                      </button>
+                    )}
+
+                    {/* View Results Button */}
+                    <button
+                      onClick={() => onViewResults(promptName, run.run_id)}
+                      className="p-1.5 text-blue-600 hover:bg-blue-50 rounded transition-colors disabled:opacity-40"
+                      title="View Results"
+                      disabled={run.status === 'running'}
+                    >
+                      <BarChart2 className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Delete Button */}
+                  <button
+                    onClick={() => handleDeleteRun(run.run_id)}
+                    className="p-1.5 text-red-600 hover:bg-red-50 rounded transition-colors disabled:opacity-50"
+                    title="Delete Run"
+                    disabled={deletingRunId === run.run_id}
+                  >
+                    {deletingRunId === run.run_id ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <XCircle className="w-4 h-4" />
+                    )}
+                  </button>
                 </div>
               </div>
             ))}

@@ -7,7 +7,7 @@ import type {
   ExperimentRun,
 } from '../types';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
@@ -240,20 +240,10 @@ export const api = {
     notes?: string;
     time_spent_seconds?: number;
   }): Promise<any> {
-    const searchParams = new URLSearchParams();
-    Object.entries(params).forEach(([key, value]) => {
-      if (value !== undefined && value !== null) {
-        if (Array.isArray(value)) {
-          // For arrays, we'll send as JSON in body
-          return;
-        }
-        searchParams.append(key, String(value));
-      }
-    });
-
-    // For array param, we need to use POST body
-    return fetchAPI(`/rankings?${searchParams.toString()}`, {
+    // Send all data in request body as JSON
+    return fetchAPI(`/rankings`, {
       method: 'POST',
+      body: JSON.stringify(params),
     });
   },
 

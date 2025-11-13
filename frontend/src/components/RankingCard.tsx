@@ -8,35 +8,27 @@ interface RankingCardProps {
     total_tokens: number;
     is_acceptable?: boolean;
   };
-  rank: number;
+  humanRank: number;
   aiScore?: number;
   aiRank?: number;
   aiComment?: string;
+  aiCriteriaScores?: Record<string, number>;
   isDragging: boolean;
   dragHandleProps?: any;
   onToggleAcceptability?: (experimentId: string, isAcceptable: boolean) => void;
 }
 
-const getRankBadge = (rank: number) => {
-  const badges = {
-    1: { emoji: '🥇', color: 'text-yellow-600', bg: 'bg-yellow-50' },
-    2: { emoji: '🥈', color: 'text-gray-600', bg: 'bg-gray-50' },
-    3: { emoji: '🥉', color: 'text-orange-600', bg: 'bg-orange-50' },
-  };
-  return badges[rank as keyof typeof badges] || { emoji: '', color: 'text-gray-500', bg: 'bg-white' };
-};
-
 export function RankingCard({
   experiment,
-  rank,
+  humanRank,
   aiScore,
   aiRank,
   aiComment,
+  aiCriteriaScores,
   isDragging,
   dragHandleProps,
   onToggleAcceptability,
 }: RankingCardProps) {
-  const badge = getRankBadge(rank);
   const isAcceptable = experiment.is_acceptable !== false;
 
   const handleToggle = (e: React.MouseEvent) => {
@@ -60,50 +52,65 @@ export function RankingCard({
     >
       {/* Header - Sticky */}
       <div
-        className={`
-          ${badge.bg} ${badge.color}
-          p-4 rounded-t-lg border-b border-gray-200
-          flex items-center justify-between
+        className="
+          bg-gray-50 text-gray-700
+          p-3 rounded-t-lg border-b border-gray-200
           sticky top-0 z-10
-        `}
+        "
       >
-        <div className="flex items-center gap-2 cursor-grab active:cursor-grabbing" {...dragHandleProps}>
-          <span className="text-2xl">{badge.emoji}</span>
-          <div>
-            <div className="font-bold text-lg">RANK #{rank}</div>
-            <div className="text-sm font-medium truncate max-w-[200px]">
-              {experiment.config_name}
+        {/* Top row: Rank, Config Name, Acceptable button */}
+        <div className="flex items-start justify-between mb-2">
+          <div className="flex items-center gap-2 cursor-grab active:cursor-grabbing flex-1" {...dragHandleProps}>
+            <div className="flex-1">
+              <div className="font-bold text-base">RANK #{humanRank}</div>
+              <div className="text-sm font-medium truncate max-w-[180px] text-gray-600">
+                {experiment.config_name}
+              </div>
             </div>
           </div>
+          <div className="flex items-center gap-2">
+            {aiScore !== undefined && (
+              <div className="text-right">
+                <div className="text-xs text-gray-500">AI Score</div>
+                <div className="text-base font-bold text-blue-600">{aiScore.toFixed(1)}/10</div>
+                {aiRank !== undefined && aiRank !== humanRank && (
+                  <div className="text-xs text-orange-600">AI: #{aiRank}</div>
+                )}
+              </div>
+            )}
+            {onToggleAcceptability && (
+              <button
+                onClick={handleToggle}
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+                className={`
+                  px-2 py-1 rounded text-xs font-medium cursor-pointer
+                  transition-colors duration-200
+                  ${isAcceptable
+                    ? 'bg-green-100 text-green-800 hover:bg-green-200 border border-green-300'
+                    : 'bg-red-100 text-red-800 hover:bg-red-200 border border-red-300'}
+                `}
+                title={isAcceptable ? 'Mark as unacceptable' : 'Mark as acceptable'}
+              >
+                {isAcceptable ? '✓' : '✗'}
+              </button>
+            )}
+          </div>
         </div>
-        <div className="flex items-center gap-3">
-          {aiScore !== undefined && (
-            <div className="text-right">
-              <div className="text-xs text-gray-600">AI Score</div>
-              <div className="text-lg font-bold">{aiScore.toFixed(1)}/10</div>
-              {aiRank !== undefined && aiRank !== rank && (
-                <div className="text-xs text-orange-600">AI: #{aiRank}</div>
-              )}
-            </div>
-          )}
-          {onToggleAcceptability && (
-            <button
-              onClick={handleToggle}
-              onMouseDown={(e) => e.stopPropagation()}
-              onTouchStart={(e) => e.stopPropagation()}
-              className={`
-                px-3 py-1.5 rounded text-xs font-medium cursor-pointer
-                transition-colors duration-200
-                ${isAcceptable
-                  ? 'bg-green-100 text-green-800 hover:bg-green-200 border border-green-300'
-                  : 'bg-red-100 text-red-800 hover:bg-red-200 border border-red-300'}
-              `}
-              title={isAcceptable ? 'Mark as unacceptable' : 'Mark as acceptable'}
-            >
-              {isAcceptable ? '✓ Acceptable' : '✗ Unacceptable'}
-            </button>
-          )}
-        </div>
+
+        {/* AI Criteria Scores - Compact horizontal layout */}
+        {aiCriteriaScores && Object.keys(aiCriteriaScores).length > 0 && (
+          <div className="flex flex-wrap gap-1.5 pt-1 border-t border-gray-200">
+            {Object.entries(aiCriteriaScores).map(([criterion, score]) => (
+              <span
+                key={criterion}
+                className="text-xs bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded border border-blue-200"
+              >
+                {criterion}: {typeof score === 'number' ? score.toFixed(1) : score}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* AI Comment Section */}
@@ -124,7 +131,7 @@ export function RankingCard({
       {/* Main Content - Response (Scrollable) */}
       <div className="flex-1 overflow-y-auto p-4">
         <div className="prose prose-sm max-w-none">
-          <div className="whitespace-pre-wrap text-gray-800 leading-relaxed text-base">
+          <div className="whitespace-pre-wrap text-gray-800 leading-relaxed text-sm">
             {experiment.response}
           </div>
         </div>

@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, RefreshCw, X, ExternalLink } from 'lucide-react';
+import { ArrowLeft, RefreshCw, X, ExternalLink, ArrowUpDown } from 'lucide-react';
 import { api } from '../api/client';
 import { DragCarousel } from '../components/DragCarousel';
-import { RecommendationBanner } from '../components/RecommendationBanner';
+
+type SortOption = 'ai' | 'human' | 'time' | 'price' | 'tokens';
 
 export default function Compare() {
   const { promptName } = useParams<{ promptName: string }>();
@@ -18,11 +19,21 @@ export default function Compare() {
   const [selectedReviewPrompt, setSelectedReviewPrompt] = useState<string>('');
   const [evaluatorModel] = useState('gpt-5'); // Always use GPT-5 with reasoning
   const [isEvaluating, setIsEvaluating] = useState(false);
+  const [sortBy, setSortBy] = useState<SortOption>('ai');
 
   // Fetch all compare data (with optional run_id filtering)
   const { data: compareData, isLoading, error, refetch } = useQuery({
     queryKey: ['compare', promptName, runId],
-    queryFn: () => api.getCompareData(promptName!, runId || undefined),
+    queryFn: async () => {
+      const data = await api.getCompareData(promptName!, runId || undefined);
+      console.log('Compare data received:', {
+        hasOriginalPrompt: !!data.original_prompt,
+        originalPromptLength: data.original_prompt?.length || 0,
+        originalPromptPreview: data.original_prompt?.substring(0, 100),
+        numExperiments: data.experiments?.length || 0
+      });
+      return data;
+    },
     enabled: !!promptName,
   });
 
@@ -56,14 +67,14 @@ export default function Compare() {
       setShowAIModal(false);
       // Poll for completion every 5 seconds for up to 2 minutes
       const pollInterval = setInterval(() => {
-        queryClient.invalidateQueries({ queryKey: ['compare', promptName] });
+        queryClient.invalidateQueries({ queryKey: ['compare', promptName, runId] });
       }, 5000);
 
       // Stop polling after 2 minutes
       setTimeout(() => {
         clearInterval(pollInterval);
         setIsEvaluating(false);
-        queryClient.invalidateQueries({ queryKey: ['compare', promptName] });
+        queryClient.invalidateQueries({ queryKey: ['compare', promptName, runId] });
       }, 120000);
     },
     onError: (error) => {
@@ -81,13 +92,71 @@ export default function Compare() {
     },
   });
 
+  // Sort experiments based on selected sort option
+  const getSortedExperimentIds = (sortOption: SortOption): string[] => {
+    if (!compareData || !compareData.experiments) return [];
+
+    const experiments = [...compareData.experiments];
+
+    switch (sortOption) {
+      case 'ai':
+        // Use AI ranking if available, otherwise fallback to original order
+        return compareData.ai_evaluation?.ranked_experiment_ids
+          || experiments.map((exp: any) => exp.experiment_id);
+
+      case 'human':
+        // Use the most recent human ranking if available
+        if (compareData.human_rankings && compareData.human_rankings.length > 0) {
+          const mostRecentRanking = compareData.human_rankings.reduce((latest: any, current: any) => {
+            return new Date(current.created_at) > new Date(latest.created_at) ? current : latest;
+          });
+          return mostRecentRanking.ranked_experiment_ids;
+        }
+        // Fallback to AI or original order
+        return compareData.ai_evaluation?.ranked_experiment_ids
+          || experiments.map((exp: any) => exp.experiment_id);
+
+      case 'time':
+        // Sort by duration (fastest first)
+        return experiments
+          .sort((a: any, b: any) => (a.duration_seconds || 0) - (b.duration_seconds || 0))
+          .map((exp: any) => exp.experiment_id);
+
+      case 'price':
+        // Sort by cost (cheapest first)
+        return experiments
+          .sort((a: any, b: any) => (a.estimated_cost_usd || 0) - (b.estimated_cost_usd || 0))
+          .map((exp: any) => exp.experiment_id);
+
+      case 'tokens':
+        // Sort by tokens (fewest first)
+        return experiments
+          .sort((a: any, b: any) => (a.total_tokens || 0) - (b.total_tokens || 0))
+          .map((exp: any) => exp.experiment_id);
+
+      default:
+        return experiments.map((exp: any) => exp.experiment_id);
+    }
+  };
+
   useEffect(() => {
     if (compareData && compareData.experiments) {
-      // Only initialize rankedIds if it's empty (first load)
+      // Initialize rankedIds on first load
       if (rankedIds.length === 0) {
-        const initialOrder = compareData.ai_evaluation?.ranked_experiment_ids
-          || compareData.experiments.map((exp: any) => exp.experiment_id);
-        setRankedIds(initialOrder);
+        const sortedIds = getSortedExperimentIds(sortBy);
+        setRankedIds(sortedIds);
+
+        // If AI evaluation exists and no human ranking yet, save AI ranking as initial human ranking
+        if (compareData.ai_evaluation && !compareData.human_rankings?.length) {
+          const timeSpent = (Date.now() - startTime) / 1000;
+          saveRanking.mutate({
+            prompt_name: promptName!,
+            evaluator_name: 'User',
+            ranked_experiment_ids: sortedIds,
+            based_on_ai_batch_id: compareData.ai_evaluation.batch_id,
+            time_spent_seconds: timeSpent,
+          });
+        }
       }
 
       // Stop evaluating spinner if AI evaluation is complete
@@ -97,32 +166,33 @@ export default function Compare() {
     }
   }, [compareData, isEvaluating, rankedIds.length]);
 
+  // Handle sort option changes
+  useEffect(() => {
+    if (compareData && compareData.experiments && rankedIds.length > 0) {
+      const sortedIds = getSortedExperimentIds(sortBy);
+      setRankedIds(sortedIds);
+      setHasChanges(false); // Reset changes when sorting
+    }
+  }, [sortBy]);
+
   const handleReorder = (newOrder: string[]) => {
     setRankedIds(newOrder);
 
-    // Check if different from AI ranking
+    // Auto-save the human ranking whenever user drags
+    const timeSpent = (Date.now() - startTime) / 1000;
+    saveRanking.mutate({
+      prompt_name: promptName!,
+      evaluator_name: 'User', // TODO: Get from auth/settings
+      ranked_experiment_ids: newOrder,
+      based_on_ai_batch_id: compareData?.ai_evaluation?.batch_id,
+      time_spent_seconds: timeSpent,
+    });
+
+    // Check if different from AI ranking (for display purposes)
     const aiOrder = compareData?.ai_evaluation?.ranked_experiment_ids || [];
     setHasChanges(JSON.stringify(newOrder) !== JSON.stringify(aiOrder));
   };
 
-  const handleSave = () => {
-    const timeSpent = (Date.now() - startTime) / 1000;
-
-    saveRanking.mutate({
-      prompt_name: promptName!,
-      evaluator_name: 'User', // TODO: Get from auth/settings
-      ranked_experiment_ids: rankedIds,
-      based_on_ai_batch_id: compareData?.ai_evaluation?.batch_id,
-      time_spent_seconds: timeSpent,
-    });
-  };
-
-  const handleReset = () => {
-    if (compareData?.ai_evaluation?.ranked_experiment_ids) {
-      setRankedIds(compareData.ai_evaluation.ranked_experiment_ids);
-      setHasChanges(false);
-    }
-  };
 
   if (isLoading) {
     return (
@@ -201,82 +271,148 @@ export default function Compare() {
 
   return (
     <div className="w-full px-4">
-      {/* Header */}
-      <div className="mb-6">
+      {/* Compact Header */}
+      <div className="mb-4">
         <Link
           to="/"
-          className="text-blue-600 hover:underline inline-flex items-center gap-2 mb-2"
+          className="text-sm text-blue-600 hover:underline inline-flex items-center gap-1 mb-3"
         >
-          <ArrowLeft className="h-4 w-4" />
-          Back to Prompt Library
+          <ArrowLeft className="h-3.5 w-3.5" />
+          Back
         </Link>
-        <h1 className="text-3xl font-bold text-gray-900">
-          Compare & Rank: {promptName}
-        </h1>
-      </div>
 
-      {/* AI Evaluation Status */}
-      {isEvaluating && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-          <div className="flex items-center gap-3">
-            <RefreshCw className="h-5 w-5 text-blue-600 animate-spin" />
-            <div>
-              <h3 className="font-semibold text-blue-800">🤖 AI Evaluation Running...</h3>
-              <p className="text-sm text-blue-700">
-                GPT-5 is comparing all {compareData?.experiments?.length || 0} configurations. This takes ~30-60 seconds.
-              </p>
+        <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+          {/* Title Row */}
+          <div className="flex items-start justify-between mb-3">
+            <div className="flex-1">
+              <h1 className="text-xl font-bold text-gray-900 mb-1">
+                {promptName}
+              </h1>
+              <div className="flex items-center gap-4 text-sm text-gray-600">
+                <span>{compareData?.experiments?.length || 0} configs</span>
+                {compareData.ai_evaluation && (
+                  <>
+                    <span>•</span>
+                    <span className="text-green-600 font-medium">✓ AI Ranked</span>
+                  </>
+                )}
+                {isEvaluating && (
+                  <>
+                    <span>•</span>
+                    <span className="text-blue-600 font-medium flex items-center gap-1">
+                      <RefreshCw className="h-3 w-3 animate-spin" />
+                      Evaluating...
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex gap-2">
+              {!compareData.ai_evaluation && !isEvaluating && (
+                <button
+                  onClick={() => setShowAIModal(true)}
+                  className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700 font-medium"
+                >
+                  Run AI Evaluation
+                </button>
+              )}
             </div>
           </div>
-        </div>
-      )}
 
-      {!isEvaluating && compareData.ai_evaluation ? (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="font-semibold text-green-800">✅ AI Evaluation Complete</h3>
-              <p className="text-sm text-green-700">
-                Model: {compareData.ai_evaluation.model_evaluator}
-              </p>
+          {/* Original Prompt */}
+          {compareData.original_prompt && (
+            <div className="border-t border-gray-200 pt-3 mt-3">
+              <div className="text-sm font-medium text-gray-700 mb-2">Original Prompt</div>
+              <div className="p-3 bg-gray-50 rounded border border-gray-200 text-sm text-gray-700 whitespace-pre-wrap font-mono text-xs max-h-32 overflow-y-auto">
+                {compareData.original_prompt}
+              </div>
             </div>
-            <button
-              className="text-sm text-green-700 hover:text-green-900 underline"
-              onClick={() => {
-                // TODO: Show AI evaluation details modal
-                alert('AI evaluation details coming soon!');
-              }}
-            >
-              View AI Reasoning
-            </button>
+          )}
+
+          {/* Recommendation Badge */}
+          {compareData.recommendation && (
+            <div className="border-t border-gray-200 pt-3 mt-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-gray-600">Recommended:</span>
+                <span className="px-2 py-1 bg-green-100 text-green-800 text-xs font-semibold rounded">
+                  {compareData.recommendation.recommended_config}
+                </span>
+                <span className="text-xs text-gray-500">
+                  Score: {compareData.recommendation.final_score.toFixed(2)}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Sort Options */}
+          <div className="border-t border-gray-200 pt-3 mt-3">
+            <div className="flex items-center gap-2 mb-2">
+              <ArrowUpDown className="h-4 w-4 text-gray-500" />
+              <span className="text-sm font-medium text-gray-700">Sort by:</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setSortBy('ai')}
+                className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${
+                  sortBy === 'ai'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                AI Score
+              </button>
+              <button
+                onClick={() => setSortBy('human')}
+                className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${
+                  sortBy === 'human'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                Human Ranking
+              </button>
+              <button
+                onClick={() => setSortBy('time')}
+                className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${
+                  sortBy === 'time'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                Time (Fastest)
+              </button>
+              <button
+                onClick={() => setSortBy('price')}
+                className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${
+                  sortBy === 'price'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                Price (Cheapest)
+              </button>
+              <button
+                onClick={() => setSortBy('tokens')}
+                className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${
+                  sortBy === 'tokens'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                Tokens (Fewest)
+              </button>
+            </div>
+          </div>
+
+          {/* Drag Instructions */}
+          <div className="border-t border-gray-200 pt-3 mt-3">
+            <p className="text-xs text-gray-600">
+              <span className="font-semibold">💡 Tip:</span> Drag cards left/right to rank (Best ← → Worst)
+            </p>
           </div>
         </div>
-      ) : !isEvaluating && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
-          <h3 className="font-semibold text-yellow-800">⚠️ No AI Evaluation Yet</h3>
-          <p className="text-sm text-yellow-700 mb-3">
-            Run AI evaluation first to get automated rankings and recommendations.
-          </p>
-          <button
-            className="bg-yellow-600 text-white px-4 py-2 rounded-md hover:bg-yellow-700 text-sm"
-            onClick={() => setShowAIModal(true)}
-          >
-            Run AI Evaluation
-          </button>
-        </div>
-      )}
-
-      {/* Recommendation */}
-      {compareData.recommendation && (
-        <RecommendationBanner recommendation={compareData.recommendation} />
-      )}
-
-      {/* Instructions */}
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-        <p className="text-sm text-blue-800">
-          <span className="font-semibold">💡 Drag cards left/right to rank</span>
-          {' • '}
-          Best (left) → Worst (right)
-        </p>
       </div>
 
       {/* Carousel */}
@@ -284,6 +420,7 @@ export default function Compare() {
         <DragCarousel
           experiments={orderedExperiments}
           aiEvaluations={aiEvalMap}
+          humanRankedIds={rankedIds}
           onReorder={handleReorder}
           onToggleAcceptability={handleToggleAcceptability}
         />
@@ -309,29 +446,15 @@ export default function Compare() {
         </div>
       )}
 
-      {/* Actions */}
-      <div className="mt-6 flex gap-4 justify-center pb-8">
-        {compareData.ai_evaluation && (
-          <button
-            onClick={handleReset}
-            disabled={!hasChanges}
-            className="px-6 py-2 border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Reset to AI Order
-          </button>
-        )}
-        <button
-          onClick={handleSave}
-          disabled={!hasChanges || saveRanking.isPending}
-          className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {saveRanking.isPending ? 'Saving...' : 'Save My Ranking'}
-        </button>
-      </div>
-
+      {/* Auto-save status indicator */}
+      {saveRanking.isPending && (
+        <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-3 text-center">
+          <p className="text-blue-800 text-sm">Saving ranking...</p>
+        </div>
+      )}
       {saveRanking.isSuccess && (
-        <div className="mt-4 bg-green-50 border border-green-200 rounded-lg p-4 text-center">
-          <p className="text-green-800 font-medium">✓ Ranking saved successfully!</p>
+        <div className="mt-4 bg-green-50 border border-green-200 rounded-lg p-3 text-center">
+          <p className="text-green-800 text-sm">✓ Ranking saved</p>
         </div>
       )}
 

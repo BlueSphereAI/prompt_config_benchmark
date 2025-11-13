@@ -30,6 +30,7 @@ export interface ExperimentRun {
   status: 'running' | 'experiment_completed' | 'analysis_completed' | 'failed';
   num_configs: number;
   total_cost: number | null;
+  avg_duration: number | null;
   created_at: string;
   recommended_config?: string | null;
 }

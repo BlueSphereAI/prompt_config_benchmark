@@ -105,6 +105,16 @@ class OverallRankings(BaseModel):
     total_evaluations: int
 
 
+class HumanRankingCreate(BaseModel):
+    """Request model for creating human rankings."""
+    prompt_name: str
+    evaluator_name: str
+    ranked_experiment_ids: List[str]
+    based_on_ai_batch_id: Optional[str] = None
+    notes: Optional[str] = None
+    time_spent_seconds: float = 0.0
+
+
 class RunExperimentRequest(BaseModel):
     """Request model for running new experiments."""
     prompt_name: Optional[str] = None
@@ -169,6 +179,7 @@ class ExperimentRunResponse(BaseModel):
     status: str  # running, experiment_completed, analysis_completed
     num_configs: int
     total_cost: Optional[float]
+    avg_duration: Optional[float] = None  # Average duration across all experiments in this run
     created_at: datetime
     recommended_config: Optional[str] = None  # Best config based on rankings
 

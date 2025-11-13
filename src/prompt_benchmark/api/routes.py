@@ -5,7 +5,7 @@ import logging
 import uuid
 from datetime import datetime
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, Body, BackgroundTasks
 from sqlalchemy.orm import Session as SQLSession
 from sqlalchemy import Integer, func, text
 
@@ -30,6 +30,7 @@ from prompt_benchmark.api.schemas import (
     LLMConfigUpdate,
     ExperimentRunResponse,
     RunWithExperimentsResponse,
+    HumanRankingCreate,
 )
 
 logger = logging.getLogger(__name__)
@@ -665,7 +666,10 @@ def start_batch_evaluation(
 
     # Run evaluation in background
     def run_evaluation():
-        run_batch_evaluation(prompt_name, review_prompt, model_evaluator, storage, parallel, run_id)
+        batch = run_batch_evaluation(prompt_name, review_prompt, model_evaluator, storage, parallel, run_id)
+        # Update run status if run_id was provided and batch completed successfully
+        if run_id and batch.status == "completed":
+            storage.update_run_status(run_id, status="analysis_completed")
 
     background_tasks.add_task(run_evaluation)
 
@@ -705,12 +709,7 @@ def get_ai_evaluations(
 
 @router.post("/rankings")
 def save_ranking(
-    prompt_name: str,
-    evaluator_name: str,
-    ranked_experiment_ids: List[str],
-    based_on_ai_batch_id: Optional[str] = None,
-    notes: Optional[str] = None,
-    time_spent_seconds: float = 0.0,
+    ranking_data: HumanRankingCreate,
     storage: ResultStorage = Depends(get_storage),
 ):
     """Save a human ranking."""
@@ -720,11 +719,11 @@ def save_ranking(
     top_3_overlap = None
     exact_position_matches = None
 
-    if based_on_ai_batch_id:
-        batch = storage.get_ai_batch(based_on_ai_batch_id)
+    if ranking_data.based_on_ai_batch_id:
+        batch = storage.get_ai_batch(ranking_data.based_on_ai_batch_id)
         if batch:
             ai_ranking = batch.ranked_experiment_ids
-            agreement = calculate_agreement(ai_ranking, ranked_experiment_ids)
+            agreement = calculate_agreement(ai_ranking, ranking_data.ranked_experiment_ids)
             changes_from_ai = agreement["changes"]
             ai_agreement_score = agreement["kendall_tau"]
             top_3_overlap = agreement["top_3_overlap"]
@@ -732,16 +731,16 @@ def save_ranking(
 
     ranking = HumanRanking(
         ranking_id=str(uuid.uuid4()),
-        prompt_name=prompt_name,
-        evaluator_name=evaluator_name,
-        ranked_experiment_ids=ranked_experiment_ids,
-        based_on_ai_batch_id=based_on_ai_batch_id,
+        prompt_name=ranking_data.prompt_name,
+        evaluator_name=ranking_data.evaluator_name,
+        ranked_experiment_ids=ranking_data.ranked_experiment_ids,
+        based_on_ai_batch_id=ranking_data.based_on_ai_batch_id,
         changes_from_ai=changes_from_ai,
         ai_agreement_score=ai_agreement_score,
         top_3_overlap=top_3_overlap,
         exact_position_matches=exact_position_matches,
-        notes=notes,
-        time_spent_seconds=time_spent_seconds,
+        notes=ranking_data.notes,
+        time_spent_seconds=ranking_data.time_spent_seconds,
     )
 
     storage.save_human_ranking(ranking)
@@ -820,6 +819,12 @@ def get_compare_data(
 
     if not experiments:
         raise HTTPException(status_code=404, detail=f"No experiments found for prompt: {prompt_name}")
+
+    logger.info(f"Compare endpoint - Found {len(experiments)} experiments")
+    logger.info(f"Compare endpoint - First experiment type: {type(experiments[0])}")
+    logger.info(f"Compare endpoint - First experiment has rendered_prompt: {hasattr(experiments[0], 'rendered_prompt')}")
+    if hasattr(experiments[0], 'rendered_prompt'):
+        logger.info(f"Compare endpoint - rendered_prompt value: {experiments[0].rendered_prompt[:100] if experiments[0].rendered_prompt else 'None'}")
 
     # Convert to dict format
     experiments_data = []
@@ -905,13 +910,26 @@ def get_compare_data(
         # No recommendation available yet
         pass
 
-    return {
+    # Get original prompt content from first experiment
+    original_prompt_content = experiments[0].rendered_prompt if experiments else None
+
+    logger.info(f"Compare endpoint - prompt_name: {prompt_name}, run_id: {run_id}")
+    logger.info(f"Compare endpoint - num experiments: {len(experiments)}")
+    logger.info(f"Compare endpoint - original_prompt length: {len(original_prompt_content) if original_prompt_content else 0}")
+    logger.info(f"Compare endpoint - original_prompt preview: {original_prompt_content[:100] if original_prompt_content else 'None'}")
+
+    result = {
         "prompt_name": prompt_name,
+        "original_prompt": original_prompt_content,
         "experiments": experiments_data,
         "ai_evaluation": ai_evaluation_data,
         "human_rankings": human_rankings_data,
         "recommendation": recommendation_data,
     }
+
+    logger.info(f"Compare endpoint - returning original_prompt: {result.get('original_prompt') is not None}")
+
+    return result
 
 
 # ============================================================================
@@ -1592,6 +1610,14 @@ def get_runs_for_prompt(
         # Get human rankings for this prompt
         rankings = storage.get_human_rankings_by_prompt(prompt_name)
 
+        # Calculate average duration across all experiments in this run
+        avg_duration = None
+        if experiments:
+            successful_experiments = [exp for exp in experiments if exp.success]
+            if successful_experiments:
+                total_duration = sum(exp.duration_seconds for exp in successful_experiments)
+                avg_duration = total_duration / len(successful_experiments)
+
         # Find recommended config (best ranked in this run)
         recommended_config = None
         if rankings and experiments:
@@ -1634,6 +1660,7 @@ def get_runs_for_prompt(
             status=run.status,
             num_configs=run.num_configs,
             total_cost=run.total_cost,
+            avg_duration=avg_duration,
             created_at=run.created_at,
             recommended_config=recommended_config
         ))

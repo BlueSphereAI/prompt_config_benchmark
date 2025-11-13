@@ -31,23 +31,25 @@ interface AIEvaluation {
   ai_rank: number;
   overall_score: number;
   justification: string;
+  criteria_scores?: Record<string, number>;
 }
 
 interface DragCarouselProps {
   experiments: Experiment[];
   aiEvaluations?: Map<string, AIEvaluation>;
+  humanRankedIds: string[];
   onReorder: (newOrder: string[]) => void;
   onToggleAcceptability?: (experimentId: string, isAcceptable: boolean) => void;
 }
 
 function SortableCard({
   experiment,
-  rank,
+  humanRank,
   aiEval,
   onToggleAcceptability,
 }: {
   experiment: Experiment;
-  rank: number;
+  humanRank: number;
   aiEval?: AIEvaluation;
   onToggleAcceptability?: (experimentId: string, isAcceptable: boolean) => void;
 }) {
@@ -69,10 +71,11 @@ function SortableCard({
     <div ref={setNodeRef} style={style} {...attributes}>
       <RankingCard
         experiment={experiment}
-        rank={rank}
+        humanRank={humanRank}
         aiScore={aiEval?.overall_score}
         aiRank={aiEval?.ai_rank}
         aiComment={aiEval?.justification}
+        aiCriteriaScores={aiEval?.criteria_scores}
         isDragging={isDragging}
         dragHandleProps={listeners}
         onToggleAcceptability={onToggleAcceptability}
@@ -84,6 +87,7 @@ function SortableCard({
 export function DragCarousel({
   experiments,
   aiEvaluations,
+  humanRankedIds,
   onReorder,
   onToggleAcceptability,
 }: DragCarouselProps) {
@@ -128,15 +132,19 @@ export function DragCarousel({
         >
           {/* Responsive grid: 1-5 cols based on screen size */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 3xl:grid-cols-5 gap-6">
-            {items.map((exp, index) => (
-              <SortableCard
-                key={exp.experiment_id}
-                experiment={exp}
-                rank={index + 1}
-                aiEval={aiEvaluations?.get(exp.experiment_id)}
-                onToggleAcceptability={onToggleAcceptability}
-              />
-            ))}
+            {items.map((exp) => {
+              // Find human rank for this experiment
+              const humanRank = humanRankedIds.indexOf(exp.experiment_id) + 1;
+              return (
+                <SortableCard
+                  key={exp.experiment_id}
+                  experiment={exp}
+                  humanRank={humanRank}
+                  aiEval={aiEvaluations?.get(exp.experiment_id)}
+                  onToggleAcceptability={onToggleAcceptability}
+                />
+              );
+            })}
           </div>
         </SortableContext>
       </div>

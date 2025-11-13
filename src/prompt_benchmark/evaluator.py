@@ -498,12 +498,35 @@ async def batch_evaluate_prompt(
         evaluations = []
         config_to_experiment = {exp.config_name: exp for exp in experiments}
 
+        # Debug logging
+        console.print(f"[blue]AI returned {len(rankings_list)} rankings[/blue]")
+        console.print(f"[blue]Expected config names: {list(config_to_experiment.keys())[:5]}...[/blue]")
+
+        unmatched_configs = []
         for ranking_data in rankings_list:
-            config_name = ranking_data["config_name"]
+            config_name = ranking_data.get("config_name", "")
             experiment = config_to_experiment.get(config_name)
 
+            # Try fuzzy matching if exact match fails
             if not experiment:
-                console.print(f"[yellow]Warning: AI ranked unknown config: {config_name}[/yellow]")
+                # Try case-insensitive match
+                for exp_name, exp in config_to_experiment.items():
+                    if exp_name.lower() == config_name.lower():
+                        experiment = exp
+                        console.print(f"[cyan]Fuzzy matched: '{config_name}' -> '{exp_name}'[/cyan]")
+                        break
+
+                # Try partial match (in case AI abbreviated)
+                if not experiment:
+                    for exp_name, exp in config_to_experiment.items():
+                        if config_name.lower() in exp_name.lower() or exp_name.lower() in config_name.lower():
+                            experiment = exp
+                            console.print(f"[cyan]Partial match: '{config_name}' -> '{exp_name}'[/cyan]")
+                            break
+
+            if not experiment:
+                unmatched_configs.append(config_name)
+                console.print(f"[yellow]Warning: AI ranked unknown config: '{config_name}'[/yellow]")
                 continue
 
             evaluation = AIEvaluation(
@@ -523,11 +546,26 @@ async def batch_evaluate_prompt(
             )
             evaluations.append(evaluation)
 
-        # 6. Save all evaluations
+        # 6. Check if we have any evaluations
+        if len(evaluations) == 0:
+            error_msg = f"AI evaluation failed: No evaluations created. "
+            if unmatched_configs:
+                error_msg += f"AI returned config names that didn't match experiments: {unmatched_configs[:5]}"
+            console.print(f"[red]{error_msg}[/red]")
+
+            # Update batch as failed
+            batch.status = "failed"
+            batch.completed_at = datetime.utcnow()
+            storage.update_ai_batch(batch)
+            raise ValueError(error_msg)
+
+        # 7. Save all evaluations
         for eval in evaluations:
             storage.save_ai_evaluation(eval)
 
-        # 7. Update batch as completed
+        console.print(f"[green]Successfully created {len(evaluations)} evaluations[/green]")
+
+        # 8. Update batch as completed
         batch.status = "completed"
         batch.num_completed = len(evaluations)
         batch.completed_at = datetime.utcnow()
@@ -535,6 +573,11 @@ async def batch_evaluate_prompt(
         batch.evaluation_ids = [e.evaluation_id for e in evaluations]
         batch.ranked_experiment_ids = [e.experiment_id for e in evaluations]
         storage.update_ai_batch(batch)
+
+        # 9. Update run status to analysis_completed if run_id was provided
+        if run_id:
+            storage.update_run_status(run_id, status="analysis_completed")
+            console.print(f"[green]Updated run {run_id} status to 'analysis_completed'[/green]")
 
         return batch
 
