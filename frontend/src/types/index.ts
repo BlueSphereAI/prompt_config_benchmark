@@ -25,6 +25,8 @@ export interface Experiment {
 export interface ExperimentRun {
   run_id: string;
   prompt_name: string;
+  session_id?: string | null;
+  run_number?: number;
   started_at: string;
   completed_at: string | null;
   status: 'running' | 'experiment_completed' | 'analysis_completed' | 'failed';

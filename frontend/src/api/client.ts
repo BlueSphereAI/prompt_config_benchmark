@@ -260,6 +260,20 @@ export const api = {
     });
   },
 
+  async runMultiRunSession(promptName: string, numRuns: number, reviewPromptId: string): Promise<any> {
+    const searchParams = new URLSearchParams();
+    searchParams.append('prompt_name', promptName);
+    searchParams.append('num_runs', numRuns.toString());
+    searchParams.append('review_prompt_id', reviewPromptId);
+    return fetchAPI(`/experiments/run-multi?${searchParams.toString()}`, {
+      method: 'POST',
+    });
+  },
+
+  async getMultiRunSessionProgress(sessionId: string): Promise<any> {
+    return fetchAPI(`/multi-run-sessions/${encodeURIComponent(sessionId)}/progress`);
+  },
+
   async getPromptsMetadata(activeOnly = true): Promise<any> {
     return fetchAPI(`/prompts/metadata?active_only=${activeOnly}`);
   },

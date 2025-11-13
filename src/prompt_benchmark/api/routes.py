@@ -11,8 +11,8 @@ from sqlalchemy import Integer, func, text
 
 from prompt_benchmark.storage import ResultStorage, DBExperimentResult, DBEvaluation
 from prompt_benchmark.analyzer import BenchmarkAnalyzer
-from prompt_benchmark.models import Evaluation, ReviewPrompt, HumanRanking, RankingWeights, Prompt, ExperimentRun
-from prompt_benchmark.evaluator import run_batch_evaluation
+from prompt_benchmark.models import Evaluation, ReviewPrompt, HumanRanking, RankingWeights, Prompt, ExperimentRun, MultiRunSession
+from prompt_benchmark.evaluator import run_batch_evaluation, batch_evaluate_prompt
 from prompt_benchmark.recommender import calculate_recommendation
 from prompt_benchmark.ranker import calculate_agreement
 from prompt_benchmark.executor import ExperimentExecutor
@@ -1584,6 +1584,144 @@ async def run_all_configs_for_prompt(
         "run_id": run_id,
         "num_configs": len(configs),
         "message": f"Running {len(configs)} configs for prompt '{prompt_name}' in background"
+    }
+
+
+@router.post("/experiments/run-multi")
+async def run_multi_run_session(
+    prompt_name: str,
+    num_runs: int = Query(default=1, ge=1, le=10, description="Number of sequential runs (1-10)"),
+    review_prompt_id: str = Query(..., description="Review prompt ID for AI ranking"),
+    background_tasks: BackgroundTasks = None,
+    storage: ResultStorage = Depends(get_storage),
+):
+    """
+    Run multiple sequential runs with AI ranking after each run.
+
+    Each run executes all active configs, then performs AI ranking,
+    before proceeding to the next run.
+    """
+    logger.info(f"Received request for multi-run session: prompt={prompt_name}, num_runs={num_runs}, review_prompt={review_prompt_id}")
+
+    # Validate prompt exists
+    prompt = storage.get_prompt(prompt_name)
+    if not prompt:
+        logger.error(f"Prompt not found: {prompt_name}")
+        raise HTTPException(status_code=404, detail=f"Prompt not found: {prompt_name}")
+
+    # Validate review prompt exists
+    review_prompt = storage.get_review_prompt(review_prompt_id)
+    if not review_prompt:
+        logger.error(f"Review prompt not found: {review_prompt_id}")
+        raise HTTPException(status_code=404, detail=f"Review prompt not found: {review_prompt_id}")
+
+    # Load all active configs
+    try:
+        configs = storage.get_all_configs_dict(active_only=True)
+        logger.info(f"Loaded {len(configs)} active configs: {list(configs.keys())}")
+    except Exception as e:
+        logger.error(f"Failed to load configs: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to load configs: {str(e)}")
+
+    if not configs:
+        logger.error("No active configs found in database")
+        raise HTTPException(status_code=404, detail="No active configs found")
+
+    # Create multi-run session record
+    session_id = f"session_{uuid.uuid4().hex[:16]}"
+    session = MultiRunSession(
+        session_id=session_id,
+        prompt_name=prompt_name,
+        num_runs=num_runs,
+        runs_completed=0,
+        review_prompt_id=review_prompt_id,
+        status="running",
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+    storage.create_multi_run_session(session)
+    logger.info(f"Created multi-run session {session_id}")
+
+    # Run multi-run session in background
+    async def run_multi_session():
+        logger.info(f"Background task started for multi-run session: {session_id}")
+        try:
+            executor = ExperimentExecutor()
+            await executor.run_multi_run_session_async(
+                session_id=session_id,
+                prompt=prompt,
+                configs=configs,
+                num_runs=num_runs,
+                review_prompt_id=review_prompt_id,
+                storage=storage
+            )
+            logger.info(f"Multi-run session {session_id} completed successfully")
+        except Exception as e:
+            logger.error(f"Multi-run session {session_id} failed: {str(e)}", exc_info=True)
+
+    # Add to background tasks
+    background_tasks.add_task(run_multi_session)
+    logger.info(f"Background task scheduled for multi-run session: {session_id}")
+
+    return {
+        "status": "started",
+        "session_id": session_id,
+        "prompt_name": prompt_name,
+        "num_runs": num_runs,
+        "num_configs": len(configs),
+        "review_prompt_id": review_prompt_id,
+        "message": f"Starting {num_runs} sequential runs for prompt '{prompt_name}' with AI ranking"
+    }
+
+
+@router.get("/multi-run-sessions/{session_id}/progress")
+async def get_multi_run_session_progress(
+    session_id: str,
+    storage: ResultStorage = Depends(get_storage),
+):
+    """
+    Get real-time progress for a multi-run session.
+
+    Returns the session details along with status of all runs in the session.
+    This endpoint is designed for polling to show live progress.
+    """
+    # Get session details
+    session = storage.get_multi_run_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Multi-run session not found: {session_id}")
+
+    # Get all runs for this session
+    runs = storage.get_runs_by_session(session_id)
+
+    # Format runs for frontend with detailed status
+    runs_data = []
+    for run in runs:
+        run_data = {
+            "run_id": run.run_id,
+            "run_number": run.run_number,
+            "status": run.status,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+            "num_configs": run.num_configs,
+            "total_cost": run.total_cost
+        }
+        runs_data.append(run_data)
+
+    # Calculate overall progress
+    progress_percentage = (session.runs_completed / session.num_runs * 100) if session.num_runs > 0 else 0
+
+    return {
+        "session_id": session.session_id,
+        "prompt_name": session.prompt_name,
+        "num_runs": session.num_runs,
+        "runs_completed": session.runs_completed,
+        "status": session.status,
+        "review_prompt_id": session.review_prompt_id,
+        "created_at": session.created_at.isoformat(),
+        "updated_at": session.updated_at.isoformat(),
+        "completed_at": session.completed_at.isoformat() if session.completed_at else None,
+        "progress_percentage": progress_percentage,
+        "runs": runs_data
     }
 
 

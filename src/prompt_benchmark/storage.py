@@ -23,6 +23,7 @@ from .models import (
     Evaluation,
     HumanRanking,
     LangfuseConfig,
+    MultiRunSession,
     Prompt,
     RankingWeights,
     Recommendation,
@@ -77,6 +78,29 @@ class DBExperimentResult(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class DBMultiRunSession(Base):
+    """Database model for multi-run sessions."""
+
+    __tablename__ = "multi_run_sessions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String, unique=True, nullable=False, index=True)
+    prompt_name = Column(String, nullable=False, index=True)
+
+    # Configuration
+    num_runs = Column(Integer, nullable=False)
+    runs_completed = Column(Integer, nullable=False, default=0)
+    review_prompt_id = Column(String, nullable=False)
+
+    # Status: running, completed, failed
+    status = Column(String, nullable=False, index=True)
+
+    # Timing
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+
 class DBExperimentRun(Base):
     """Database model for experiment runs."""
 
@@ -85,6 +109,10 @@ class DBExperimentRun(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     run_id = Column(String, unique=True, nullable=False, index=True)
     prompt_name = Column(String, nullable=False, index=True)
+
+    # Multi-run session tracking
+    session_id = Column(String, nullable=True, index=True)
+    run_number = Column(Integer, nullable=False, default=1, index=True)
 
     # Timing
     started_at = Column(DateTime, nullable=False)
@@ -1083,6 +1111,8 @@ class ResultStorage:
             db_run = DBExperimentRun(
                 run_id=run.run_id,
                 prompt_name=run.prompt_name,
+                session_id=run.session_id,
+                run_number=run.run_number,
                 started_at=run.started_at,
                 completed_at=run.completed_at,
                 status=run.status,
@@ -1237,6 +1267,8 @@ class ResultStorage:
         return ExperimentRun(
             run_id=db_run.run_id,
             prompt_name=db_run.prompt_name,
+            session_id=db_run.session_id,
+            run_number=db_run.run_number,
             started_at=db_run.started_at,
             completed_at=db_run.completed_at,
             status=db_run.status,
@@ -1244,3 +1276,137 @@ class ResultStorage:
             total_cost=db_run.total_cost,
             created_at=db_run.created_at
         )
+
+    def _db_multi_run_session_to_model(self, db_session: DBMultiRunSession) -> MultiRunSession:
+        """Convert database multi-run session model to Pydantic model."""
+        return MultiRunSession(
+            session_id=db_session.session_id,
+            prompt_name=db_session.prompt_name,
+            num_runs=db_session.num_runs,
+            runs_completed=db_session.runs_completed,
+            review_prompt_id=db_session.review_prompt_id,
+            status=db_session.status,
+            created_at=db_session.created_at,
+            updated_at=db_session.updated_at,
+            completed_at=db_session.completed_at
+        )
+
+    # ========================================================================
+    # Multi-Run Session Management
+    # ========================================================================
+
+    def create_multi_run_session(self, session: MultiRunSession) -> int:
+        """
+        Create a new multi-run session record.
+
+        Args:
+            session: The MultiRunSession to create
+
+        Returns:
+            Database ID of the created session
+        """
+        with Session(self.engine) as db_session:
+            db_multi_run = DBMultiRunSession(
+                session_id=session.session_id,
+                prompt_name=session.prompt_name,
+                num_runs=session.num_runs,
+                runs_completed=session.runs_completed,
+                review_prompt_id=session.review_prompt_id,
+                status=session.status,
+                created_at=session.created_at,
+                updated_at=session.updated_at,
+                completed_at=session.completed_at
+            )
+            db_session.add(db_multi_run)
+            db_session.commit()
+            db_session.refresh(db_multi_run)
+            return db_multi_run.id
+
+    def get_multi_run_session(self, session_id: str) -> Optional[MultiRunSession]:
+        """
+        Get a multi-run session by its ID.
+
+        Args:
+            session_id: The session ID
+
+        Returns:
+            MultiRunSession or None if not found
+        """
+        with Session(self.engine) as session:
+            stmt = select(DBMultiRunSession).where(DBMultiRunSession.session_id == session_id)
+            db_session = session.execute(stmt).scalar_one_or_none()
+            if not db_session:
+                return None
+            return self._db_multi_run_session_to_model(db_session)
+
+    def get_multi_run_sessions_by_prompt(self, prompt_name: str) -> List[MultiRunSession]:
+        """
+        Get all multi-run sessions for a specific prompt.
+
+        Args:
+            prompt_name: The prompt name
+
+        Returns:
+            List of MultiRunSessions, ordered by most recent first
+        """
+        with Session(self.engine) as session:
+            stmt = select(DBMultiRunSession).where(
+                DBMultiRunSession.prompt_name == prompt_name
+            ).order_by(DBMultiRunSession.created_at.desc())
+            db_sessions = session.execute(stmt).scalars().all()
+            return [self._db_multi_run_session_to_model(s) for s in db_sessions]
+
+    def update_multi_run_session(
+        self,
+        session_id: str,
+        runs_completed: Optional[int] = None,
+        status: Optional[str] = None,
+        completed_at: Optional[datetime] = None
+    ) -> bool:
+        """
+        Update a multi-run session's progress and status.
+
+        Args:
+            session_id: The session ID
+            runs_completed: Number of runs completed
+            status: New status (running, completed, failed)
+            completed_at: Optional completion timestamp
+
+        Returns:
+            True if updated successfully, False if session not found
+        """
+        with Session(self.engine) as session:
+            stmt = select(DBMultiRunSession).where(DBMultiRunSession.session_id == session_id)
+            db_multi_run = session.execute(stmt).scalar_one_or_none()
+
+            if not db_multi_run:
+                return False
+
+            if runs_completed is not None:
+                db_multi_run.runs_completed = runs_completed
+            if status is not None:
+                db_multi_run.status = status
+            if completed_at is not None:
+                db_multi_run.completed_at = completed_at
+
+            db_multi_run.updated_at = datetime.utcnow()
+
+            session.commit()
+            return True
+
+    def get_runs_by_session(self, session_id: str) -> List[ExperimentRun]:
+        """
+        Get all runs for a specific multi-run session.
+
+        Args:
+            session_id: The session ID
+
+        Returns:
+            List of ExperimentRuns, ordered by run_number
+        """
+        with Session(self.engine) as session:
+            stmt = select(DBExperimentRun).where(
+                DBExperimentRun.session_id == session_id
+            ).order_by(DBExperimentRun.run_number.asc())
+            db_runs = session.execute(stmt).scalars().all()
+            return [self._db_run_to_model(r) for r in db_runs]

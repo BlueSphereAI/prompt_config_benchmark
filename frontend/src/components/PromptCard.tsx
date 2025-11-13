@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Play, Trash2, Edit, BarChart2, XCircle, Sparkles, Loader2 } from 'lucide-react';
 import type { ExperimentRun } from '../types/index';
 import { api } from '../api/client';
+import MultiRunDialog from './MultiRunDialog';
 
 interface PromptCardProps {
   promptName: string;
@@ -13,6 +14,7 @@ interface PromptCardProps {
   onRunsUpdated: () => void;
   onStartAIEvaluation: (promptName: string, runId: string) => void;
   evaluatingRunId?: string | null;
+  onStartMultiRunSession?: (sessionId: string, numRuns: number) => void;
 }
 
 const STATUS_COLORS = {
@@ -39,8 +41,10 @@ export default function PromptCard({
   onRunsUpdated,
   onStartAIEvaluation,
   evaluatingRunId,
+  onStartMultiRunSession,
 }: PromptCardProps) {
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
 
   const handleDeleteRun = async (runId: string) => {
     if (!confirm('Are you sure you want to delete this run and all its experiments?')) {
@@ -90,7 +94,7 @@ export default function PromptCard({
               <Edit className="w-4 h-4" />
             </button>
             <button
-              onClick={() => onRunExperiments(promptName)}
+              onClick={() => setIsDialogOpen(true)}
               className="px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded hover:bg-blue-700 transition-colors flex items-center gap-1"
               title="Run Experiments"
             >
@@ -128,13 +132,16 @@ export default function PromptCard({
                 {/* Header Row: Timestamp & Status */}
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-xs text-gray-600">
-                    {formatDate(run.started_at)}
+                    {run.run_number ? `Run #${run.run_number} • ` : ''}{formatDate(run.started_at)}
                   </div>
                   <span
-                    className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                    className={`px-2 py-0.5 rounded-full text-xs font-medium flex items-center gap-1 ${
                       STATUS_COLORS[run.status]
                     }`}
                   >
+                    {(run.status === 'running' || run.status === 'experiment_completed') && (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    )}
                     {STATUS_LABELS[run.status]}
                   </span>
                 </div>
@@ -210,6 +217,18 @@ export default function PromptCard({
           </div>
         )}
       </div>
+
+      {/* Multi-Run Dialog */}
+      <MultiRunDialog
+        promptName={promptName}
+        isOpen={isDialogOpen}
+        onClose={() => setIsDialogOpen(false)}
+        onStartSession={(sessionId, numRuns) => {
+          if (onStartMultiRunSession) {
+            onStartMultiRunSession(sessionId, numRuns);
+          }
+        }}
+      />
     </div>
   );
 }

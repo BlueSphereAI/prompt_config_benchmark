@@ -30,9 +30,44 @@ export function Prompts() {
   const [loadingReviewPrompts, setLoadingReviewPrompts] = useState(false);
   const [aiEvalError, setAiEvalError] = useState<string>('');
 
+  // Multi-run session tracking
+  const [activeSessionIds, setActiveSessionIds] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     fetchPromptsWithRuns();
   }, []);
+
+  // Poll active sessions for progress
+  useEffect(() => {
+    if (activeSessionIds.size === 0) return;
+
+    const pollSessions = async () => {
+      for (const sessionId of activeSessionIds) {
+        try {
+          const progress = await api.getMultiRunSessionProgress(sessionId);
+
+          // If session is completed, remove it from active sessions
+          if (progress.status === 'completed' || progress.status === 'failed') {
+            setActiveSessionIds(prev => {
+              const next = new Set(prev);
+              next.delete(sessionId);
+              return next;
+            });
+          }
+
+          // Refresh runs to show latest progress
+          await fetchPromptsWithRuns();
+        } catch (error) {
+          console.error(`Failed to poll session ${sessionId}:`, error);
+        }
+      }
+    };
+
+    // Poll every 2 seconds
+    const interval = setInterval(pollSessions, 2000);
+
+    return () => clearInterval(interval);
+  }, [activeSessionIds]);
 
   const fetchPromptsWithRuns = async () => {
     try {
@@ -110,6 +145,16 @@ export function Prompts() {
 
   const handleViewResults = (promptName: string, runId: string) => {
     navigate(`/compare/${promptName}?run_id=${runId}`);
+  };
+
+  const handleStartMultiRunSession = (sessionId: string, numRuns: number) => {
+    console.log(`Multi-run session started: ${sessionId}, ${numRuns} runs`);
+
+    // Add to active sessions for polling
+    setActiveSessionIds(prev => new Set(prev).add(sessionId));
+
+    // Refresh to show new runs
+    fetchPromptsWithRuns();
   };
 
   const handleStartAIEvaluation = async (promptName: string, runId: string) => {
@@ -318,6 +363,7 @@ export function Prompts() {
               onRunsUpdated={fetchPromptsWithRuns}
               onStartAIEvaluation={handleStartAIEvaluation}
               evaluatingRunId={evaluatingRunId}
+              onStartMultiRunSession={handleStartMultiRunSession}
             />
           ))}
         </div>

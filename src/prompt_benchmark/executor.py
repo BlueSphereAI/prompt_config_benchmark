@@ -18,7 +18,9 @@ from openai.types.chat import ChatCompletion
 from .models import (
     Experiment,
     ExperimentResult,
+    ExperimentRun,
     LangfuseConfig,
+    MultiRunSession,
     Prompt,
 )
 
@@ -553,3 +555,159 @@ class ExperimentExecutor:
         all_results = {name: results for name, results in zip(prompt_names, results_list)}
 
         return all_results
+
+    async def run_multi_run_session_async(
+        self,
+        session_id: str,
+        prompt: Prompt,
+        configs: Dict[str, LangfuseConfig],
+        num_runs: int,
+        review_prompt_id: str,
+        storage,
+        prompt_variables: Optional[Dict] = None,
+        metadata: Optional[Dict] = None
+    ) -> None:
+        """
+        Run multiple sequential runs with AI ranking after each run.
+
+        This is the orchestrator for multi-run sessions. It:
+        1. Creates a run record
+        2. Executes all experiments for that run
+        3. Updates run status to experiment_completed
+        4. Triggers AI ranking for that run
+        5. Updates run status to analysis_completed
+        6. Repeats for next run
+
+        Args:
+            session_id: The multi-run session ID
+            prompt: The prompt to use
+            configs: Dictionary mapping config names to LangfuseConfig instances
+            num_runs: Number of runs to execute
+            review_prompt_id: Review prompt template ID for AI ranking
+            storage: ResultStorage instance for database operations
+            prompt_variables: Variables for the prompt
+            metadata: Additional metadata
+
+        Returns:
+            None (updates database directly)
+        """
+        logger.info(f"Starting multi-run session {session_id}: {num_runs} runs for prompt '{prompt.name}'")
+
+        try:
+            for run_number in range(1, num_runs + 1):
+                logger.info(f"=== Starting Run {run_number}/{num_runs} ===")
+
+                # Generate unique run_id
+                run_id = f"run_{uuid.uuid4().hex[:12]}"
+
+                # Create run record with status "running"
+                run = ExperimentRun(
+                    run_id=run_id,
+                    prompt_name=prompt.name,
+                    session_id=session_id,
+                    run_number=run_number,
+                    started_at=datetime.utcnow(),
+                    completed_at=None,
+                    status="running",
+                    num_configs=len(configs),
+                    total_cost=None,
+                    created_at=datetime.utcnow()
+                )
+                storage.create_run(run)
+                logger.info(f"Created run record: {run_id}")
+
+                try:
+                    # Execute experiments for this run
+                    logger.info(f"Running experiments for {len(configs)} configs...")
+                    results = await self.run_batch_async(
+                        prompt=prompt,
+                        configs=configs,
+                        prompt_variables=prompt_variables,
+                        metadata=metadata,
+                        storage=storage,
+                        run_id=run_id
+                    )
+
+                    # Calculate total cost
+                    total_cost = sum(r.estimated_cost_usd for r in results.values() if r.estimated_cost_usd)
+
+                    # Update run status to experiment_completed
+                    storage.update_run_status(
+                        run_id=run_id,
+                        status="experiment_completed",
+                        total_cost=total_cost
+                    )
+                    logger.info(f"Experiments completed for run {run_number}. Total cost: ${total_cost:.4f}")
+
+                    # Trigger AI ranking for this run
+                    logger.info(f"Starting AI ranking for run {run_number}...")
+                    try:
+                        # Get review prompt from storage
+                        review_prompt = storage.get_review_prompt(review_prompt_id)
+                        if not review_prompt:
+                            raise ValueError(f"Review prompt not found: {review_prompt_id}")
+
+                        # Import here to avoid circular dependency
+                        from .evaluator import batch_evaluate_prompt
+
+                        await batch_evaluate_prompt(
+                            prompt_name=prompt.name,
+                            review_prompt=review_prompt,
+                            evaluator_model="gpt-5",  # Use GPT-5 for AI ranking
+                            storage=storage,
+                            run_id=run_id
+                        )
+                        logger.info(f"AI ranking completed for run {run_number}")
+
+                        # Update run status to analysis_completed
+                        storage.update_run_status(
+                            run_id=run_id,
+                            status="analysis_completed",
+                            completed_at=datetime.utcnow()
+                        )
+                    except Exception as e:
+                        logger.error(f"AI ranking failed for run {run_number}: {str(e)}", exc_info=True)
+                        # Keep status as experiment_completed (partial success)
+                        storage.update_run_status(
+                            run_id=run_id,
+                            completed_at=datetime.utcnow()
+                        )
+
+                    # Update session progress
+                    storage.update_multi_run_session(
+                        session_id=session_id,
+                        runs_completed=run_number
+                    )
+                    logger.info(f"=== Run {run_number}/{num_runs} completed ===")
+
+                except Exception as e:
+                    logger.error(f"Run {run_number} failed: {str(e)}", exc_info=True)
+                    # Mark run as failed
+                    storage.update_run_status(
+                        run_id=run_id,
+                        status="failed",
+                        completed_at=datetime.utcnow()
+                    )
+                    # Continue to next run despite failure
+                    storage.update_multi_run_session(
+                        session_id=session_id,
+                        runs_completed=run_number
+                    )
+
+            # Mark session as completed
+            storage.update_multi_run_session(
+                session_id=session_id,
+                status="completed",
+                completed_at=datetime.utcnow()
+            )
+            logger.info(f"Multi-run session {session_id} completed successfully")
+
+        except Exception as e:
+            logger.error(f"Multi-run session {session_id} failed catastrophically: {str(e)}", exc_info=True)
+            # Mark session as failed
+            storage.update_multi_run_session(
+                session_id=session_id,
+                status="failed",
+                completed_at=datetime.utcnow()
+            )
+            raise

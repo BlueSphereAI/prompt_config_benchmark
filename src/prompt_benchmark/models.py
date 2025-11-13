@@ -179,14 +179,43 @@ class ExperimentResult(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class MultiRunSession(BaseModel):
+    """
+    A multi-run session that executes multiple sequential runs with AI ranking.
+
+    Each session contains multiple runs that are executed sequentially,
+    with AI ranking performed after each run completes.
+    """
+    session_id: str = Field(..., description="Unique session identifier")
+    prompt_name: str = Field(..., description="Name of the prompt for all runs")
+
+    # Configuration
+    num_runs: int = Field(..., ge=1, description="Total number of runs to execute")
+    runs_completed: int = Field(default=0, description="Number of runs completed so far")
+    review_prompt_id: str = Field(..., description="Review prompt template for AI ranking")
+
+    # Status: running, completed, failed
+    status: str = Field(..., description="Current status of the session")
+
+    # Timing
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    completed_at: Optional[datetime] = Field(None, description="When the session completed")
+
+
 class ExperimentRun(BaseModel):
     """
     A single run of experiments for a prompt.
 
     Groups all experiments executed together when "Run All Configs" is clicked.
+    Can be part of a multi-run session or standalone.
     """
     run_id: str = Field(..., description="Unique run identifier")
     prompt_name: str = Field(..., description="Name of the prompt this run is for")
+
+    # Multi-run session tracking
+    session_id: Optional[str] = Field(None, description="Session ID if part of multi-run")
+    run_number: int = Field(default=1, description="Run number within session (1, 2, 3...)")
 
     # Timing
     started_at: datetime = Field(..., description="When the run started")
