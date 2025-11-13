@@ -487,6 +487,10 @@ async def batch_evaluate_prompt(
         # Only add temperature for non-GPT-5 models
         if not evaluator_model.startswith("gpt-5"):
             api_params["temperature"] = 0.3
+        else:
+            # Add GPT-5 specific parameters for high-quality evaluation
+            api_params["reasoning_effort"] = "high"
+            api_params["verbosity"] = "high"
 
         response = await client.chat.completions.create(**api_params)
 
@@ -642,6 +646,10 @@ async def evaluate_single_experiment(
         # Only add temperature for non-GPT-5 models
         if not evaluator_model.startswith("gpt-5"):
             api_params["temperature"] = 0.3  # Lower temperature for more consistent evaluations
+        else:
+            # Add GPT-5 specific parameters for high-quality evaluation
+            api_params["reasoning_effort"] = "high"
+            api_params["verbosity"] = "high"
 
         response = await client.chat.completions.create(**api_params)
 

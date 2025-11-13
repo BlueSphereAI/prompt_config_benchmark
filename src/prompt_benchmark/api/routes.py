@@ -639,7 +639,7 @@ def get_review_prompt_stats(
 def start_batch_evaluation(
     prompt_name: str,
     review_prompt_id: str,
-    model_evaluator: str = "gpt-4-turbo",
+    model_evaluator: str = "gpt-5",
     run_id: Optional[str] = Query(None, description="Filter to specific run"),
     parallel: bool = True,
     background_tasks: BackgroundTasks = BackgroundTasks(),
