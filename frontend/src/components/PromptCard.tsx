@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Play, Trash2, Edit, BarChart2, XCircle, Sparkles, Loader2 } from 'lucide-react';
-import type { ExperimentRun } from '../types/index';
+import { Play, Trash2, Edit, BarChart2, XCircle, Sparkles, Loader2, FileText, X } from 'lucide-react';
+import type { ExperimentRun, Experiment } from '../types/index';
 import { api } from '../api/client';
 import MultiRunDialog from './MultiRunDialog';
 
@@ -45,6 +45,10 @@ export default function PromptCard({
 }: PromptCardProps) {
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [showDataModal, setShowDataModal] = useState(false);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [runExperiments, setRunExperiments] = useState<Experiment[]>([]);
+  const [loadingData, setLoadingData] = useState(false);
 
   const handleDeleteRun = async (runId: string) => {
     if (!confirm('Are you sure you want to delete this run and all its experiments?')) {
@@ -63,6 +67,23 @@ export default function PromptCard({
     }
   };
 
+  const handleViewData = async (runId: string) => {
+    setSelectedRunId(runId);
+    setShowDataModal(true);
+    setLoadingData(true);
+
+    try {
+      const data = await api.getRun(runId);
+      setRunExperiments(data.experiments);
+    } catch (error) {
+      console.error('Failed to fetch run data:', error);
+      alert('Failed to load run data: ' + (error as Error).message);
+      setShowDataModal(false);
+    } finally {
+      setLoadingData(false);
+    }
+  };
+
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleString('en-US', {
@@ -77,6 +98,50 @@ export default function PromptCard({
   const formatCost = (cost: number | null) => {
     if (cost === null || cost === undefined) return '-';
     return `$${cost.toFixed(3)}`;
+  };
+
+  const generateMarkdownData = (): string => {
+    if (runExperiments.length === 0) {
+      return 'No experiment data available.';
+    }
+
+    let markdown = `# Experiment Run Data\n\n`;
+    markdown += `**Run ID:** ${selectedRunId}\n\n`;
+    markdown += `**Total Experiments:** ${runExperiments.length}\n\n`;
+    markdown += `---\n\n`;
+
+    runExperiments.forEach((exp, index) => {
+      markdown += `## Experiment ${index + 1}: ${exp.config_name}\n\n`;
+      markdown += `- **Experiment ID:** ${exp.experiment_id}\n`;
+      markdown += `- **Config Name:** ${exp.config_name}\n`;
+      markdown += `- **Success:** ${exp.success ? 'Yes' : 'No'}\n`;
+      markdown += `- **Acceptable:** ${exp.is_acceptable ? 'Yes' : 'No'}\n`;
+      markdown += `- **Duration:** ${exp.duration_seconds.toFixed(2)}s\n`;
+      markdown += `- **Cost:** $${exp.estimated_cost_usd.toFixed(4)}\n`;
+      markdown += `- **Tokens:** ${exp.total_tokens} (prompt: ${exp.prompt_tokens}, completion: ${exp.completion_tokens})\n`;
+      markdown += `- **Finish Reason:** ${exp.finish_reason || 'N/A'}\n`;
+      markdown += `- **Start Time:** ${new Date(exp.start_time).toLocaleString()}\n`;
+      markdown += `- **End Time:** ${new Date(exp.end_time).toLocaleString()}\n`;
+
+      if (exp.error) {
+        markdown += `- **Error:** ${exp.error}\n`;
+      }
+
+      markdown += `\n### Response\n\n`;
+      markdown += `\`\`\`\n${exp.response || 'No response'}\n\`\`\`\n\n`;
+
+      markdown += `### Configuration\n\n`;
+      markdown += `\`\`\`json\n${JSON.stringify(exp.config_json, null, 2)}\n\`\`\`\n\n`;
+
+      if (exp.metadata_json && Object.keys(exp.metadata_json).length > 0) {
+        markdown += `### Metadata\n\n`;
+        markdown += `\`\`\`json\n${JSON.stringify(exp.metadata_json, null, 2)}\n\`\`\`\n\n`;
+      }
+
+      markdown += `---\n\n`;
+    });
+
+    return markdown;
   };
 
   return (
@@ -196,6 +261,16 @@ export default function PromptCard({
                     >
                       <BarChart2 className="w-4 h-4" />
                     </button>
+
+                    {/* View Data Button */}
+                    <button
+                      onClick={() => handleViewData(run.run_id)}
+                      className="p-1.5 text-green-600 hover:bg-green-50 rounded transition-colors disabled:opacity-40"
+                      title="View Run Data"
+                      disabled={run.status === 'running'}
+                    >
+                      <FileText className="w-4 h-4" />
+                    </button>
                   </div>
 
                   {/* Delete Button */}
@@ -229,6 +304,77 @@ export default function PromptCard({
           }
         }}
       />
+
+      {/* Data Modal */}
+      {showDataModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+              <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                <FileText className="w-5 h-5" />
+                Experiment Run Data
+              </h2>
+              <button
+                onClick={() => {
+                  setShowDataModal(false);
+                  setSelectedRunId(null);
+                  setRunExperiments([]);
+                }}
+                className="p-2 text-gray-500 hover:text-gray-700 rounded hover:bg-gray-100 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {loadingData ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+                  <span className="ml-3 text-gray-600">Loading experiment data...</span>
+                </div>
+              ) : (
+                <div className="prose max-w-none">
+                  <pre className="whitespace-pre-wrap font-mono text-sm bg-gray-50 p-4 rounded border border-gray-200 overflow-x-auto">
+                    {generateMarkdownData()}
+                  </pre>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-6 py-4 border-t border-gray-200 flex justify-between items-center bg-gray-50">
+              <span className="text-sm text-gray-600">
+                {runExperiments.length > 0 && `${runExperiments.length} experiment(s)`}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    const markdown = generateMarkdownData();
+                    navigator.clipboard.writeText(markdown);
+                    alert('Copied to clipboard!');
+                  }}
+                  disabled={loadingData}
+                  className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Copy to Clipboard
+                </button>
+                <button
+                  onClick={() => {
+                    setShowDataModal(false);
+                    setSelectedRunId(null);
+                    setRunExperiments([]);
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded hover:bg-gray-100 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
