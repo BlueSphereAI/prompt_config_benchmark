@@ -750,10 +750,11 @@ class ResultStorage:
             if not batches:
                 return []
 
-            # Get evaluations from the most recent batch
-            latest_batch = batches[0]
+            # Get evaluations from ALL batches for this prompt (not just latest)
+            # This ensures evaluations are available across all runs
+            batch_ids = [b.batch_id for b in batches]
             eval_stmt = select(DBAIEvaluation).where(
-                DBAIEvaluation.batch_id == latest_batch.batch_id
+                DBAIEvaluation.batch_id.in_(batch_ids)
             )
             db_evals = session.execute(eval_stmt).scalars().all()
 

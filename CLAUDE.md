@@ -94,9 +94,11 @@ sqlite3 data/results/benchmark.db "SELECT * FROM experiment_results"
 - **Important**: Token limits must be 2-3x higher than other models to account for reasoning overhead
 - Empty responses with `finish_reason: length` indicate reasoning consumed entire budget
 
-**Unsupported Parameters**:
+**GPT-5 API Parameters**:
 - GPT-5 does NOT support `temperature` parameter
-- `verbosity` and `reasoning_effort` are stored in config but NOT currently sent to API (TODO in executor.py lines 254-259)
+- `verbosity` is sent as direct parameter: `verbosity="low"|"medium"|"high"`
+- `reasoning_effort` is sent as direct parameter: `reasoning_effort="minimal"|"low"|"medium"|"high"`
+- Both parameters are properly mapped in `_prepare_api_params()` at executor.py lines 276-285
 
 ### Models (`models.py`)
 
@@ -175,6 +177,24 @@ All configs updated with high token limits due to reasoning overhead:
 ### Missing Dependencies
 - Cause: Virtual environment not activated or dependencies not installed
 - Fix: `source venv/bin/activate && pip install -e .`
+
+## Verification Tools
+
+### Verify Parameters are Being Tested
+```bash
+# Test parameter preparation (without API calls)
+python scripts/test_parameters.py
+
+# Verify parameters in past experiments
+python scripts/verify_parameters.py --summary
+python scripts/verify_parameters.py --hours 24  # Last 24 hours
+python scripts/verify_parameters.py --prompt "prompt-name"
+```
+
+These tools help ensure that:
+- Different configs actually use different API parameters
+- GPT-5 `verbosity` and `reasoning_effort` are properly sent to OpenAI
+- Parameter variations are reflected in experiment results
 
 ## Environment Variables
 
